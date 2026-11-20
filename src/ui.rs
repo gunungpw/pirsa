@@ -121,8 +121,17 @@ fn search_row(app: &Launcher) -> Element<'_, Message> {
 
 fn section_label(app: &Launcher) -> Element<'_, Message> {
     let query_empty = app.query.trim().is_empty();
-    let title = if query_empty { "All apps" } else { "Results" };
-    let count = if query_empty {
+    let indexing = app.indexing && app.apps.is_empty();
+    let title = if indexing {
+        "Indexing"
+    } else if query_empty {
+        "All apps"
+    } else {
+        "Results"
+    };
+    let count = if indexing {
+        "SCANNING…".to_owned()
+    } else if query_empty {
         format!("{} APPS", app.apps.len())
     } else {
         format!("{} FOUND", app.results.len())
@@ -218,7 +227,12 @@ fn result_row(app: &Launcher, app_index: usize, position: usize) -> Element<'_, 
 }
 
 fn empty_state(app: &Launcher) -> Element<'_, Message> {
-    let (title, subtitle) = if app.apps.is_empty() {
+    let (title, subtitle) = if app.indexing {
+        (
+            "Indexing Start Menu…".to_owned(),
+            "Apps will appear in a moment.".to_owned(),
+        )
+    } else if app.apps.is_empty() {
         (
             "No apps indexed".to_owned(),
             "Press F5 to scan the Start Menu again.".to_owned(),

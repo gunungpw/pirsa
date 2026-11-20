@@ -1,4 +1,4 @@
-﻿//! Start Menu application discovery and launching.
+//! Start Menu application discovery and launching.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -42,7 +42,7 @@ impl AppEntry {
 }
 
 /// Result of a Start Menu scan.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct ScanResult {
     pub apps: Vec<AppEntry>,
     pub warning: Option<String>,

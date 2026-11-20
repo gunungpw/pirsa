@@ -26,6 +26,8 @@ Pirsa searches the Start Menu (including Store/UWP apps) and gets out of the way
 - **Focus-aware** — hiding returns focus to the window you came from; clicking
   elsewhere auto-hides the launcher.
 - **Native and small** — one executable, no WebView, no runtime dependencies.
+- **Fast start** — the window appears immediately while Start Menu indexing
+  finishes in the background.
 - **Proper Windows icon** — embedded in the executable and shortcuts, with
   product/version metadata shown in Explorer and Task Manager.
 
@@ -41,6 +43,14 @@ cargo build --release
 ```
 
 The executable is `target\release\pirsa.exe`.
+
+### Static build
+
+Release builds statically link the MSVC C runtime via
+[`.cargo/config.toml`](.cargo/config.toml) (`+crt-static`), with
+`panic = "abort"`, LTO, and symbol stripping enabled. The resulting `pirsa.exe`
+has no dependency on `VCRUNTIME140.dll` or the UCRT and needs no Visual C++
+Redistributable. Only Windows system DLLs are imported.
 
 For development:
 

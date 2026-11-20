@@ -1,6 +1,6 @@
-﻿//! Launcher state and iced update logic.
+//! Launcher state and iced update logic.
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use iced::futures::{StreamExt, stream};
 use iced::keyboard::key::Named;
@@ -9,7 +9,7 @@ use iced::widget::operation;
 use iced::{Element, Event, Subscription, Task, window};
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::platform::{self, AppEntry, HotkeyStatus};
+use crate::platform::{self, AppEntry, HotkeyStatus, ScanResult};
 use crate::search;
 use crate::ui;
 
@@ -26,6 +26,7 @@ pub struct Launcher {
     pub(crate) hotkey: HotkeyStatus,
     pub(crate) error: Option<String>,
     pub(crate) warning: Option<String>,
+    pub(crate) indexing: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -41,29 +42,14 @@ pub enum Message {
     Tick,
     EnsureFocus,
     WindowReady(window::Id, isize),
+    ScanComplete(ScanResult),
     Event(Event),
 }
 
 impl Launcher {
     pub fn boot() -> (Self, Task<Message>) {
-        let started = Instant::now();
-        let scan = platform::scan();
-        let elapsed = started.elapsed();
-
-        crate::util::log(format!(
-            "indexed {} apps in {} ms",
-            scan.apps.len(),
-            elapsed.as_millis()
-        ));
-
-        let error = if scan.apps.is_empty() {
-            Some("No Start Menu applications were found.".to_owned())
-        } else {
-            None
-        };
-
-        let mut launcher = Self {
-            apps: scan.apps,
+        let launcher = Self {
+            apps: Vec::new(),
             results: Vec::new(),
             query: String::new(),
             selected: 0,
@@ -72,19 +58,23 @@ impl Launcher {
             window_id: None,
             hwnd: None,
             hotkey: platform::hotkey_status(),
-            error,
-            warning: scan.warning,
+            error: None,
+            warning: None,
+            indexing: true,
         };
-        launcher.recompute();
 
         let ready: Task<Message> = window::oldest().and_then(|id| {
             window::raw_id::<Message>(id).map(move |raw| Message::WindowReady(id, raw as isize))
         });
 
+        // Do not block window creation on the Start Menu scan. The window
+        // appears immediately while indexing finishes on the executor.
+        let scan = Task::perform(async { platform::scan() }, Message::ScanComplete);
+
         let task = if launcher.visible {
-            Task::batch([ready, focus_input()])
+            Task::batch([ready, focus_input(), scan])
         } else {
-            ready
+            Task::batch([ready, scan])
         };
 
         (launcher, task)
@@ -126,6 +116,23 @@ impl Launcher {
                 .unwrap_or_else(Task::none),
             Message::Platform | Message::Tick => self.tick(),
             Message::EnsureFocus => self.ensure_focus(),
+            Message::ScanComplete(scan) => {
+                let count = scan.apps.len();
+
+                self.apps = scan.apps;
+                self.warning = scan.warning;
+                self.indexing = false;
+                self.error = if count == 0 {
+                    Some("No Start Menu applications were found.".to_owned())
+                } else {
+                    None
+                };
+                self.recompute();
+                self.selected = 0;
+
+                crate::util::log(format!("indexed {count} apps"));
+                Task::none()
+            }
             Message::WindowReady(id, hwnd) => {
                 self.window_id = Some(id);
                 self.hwnd = Some(hwnd);

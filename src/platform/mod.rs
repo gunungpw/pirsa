@@ -1,4 +1,4 @@
-﻿//! Windows integration: global hotkeys, single instance, Start Menu apps, and
+//! Windows integration: global hotkeys, single instance, Start Menu apps, and
 //! native window control.
 
 pub mod apps;
@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use tokio::sync::broadcast;
 
-pub use apps::{AppEntry, launch, scan};
+pub use apps::{AppEntry, ScanResult, launch, scan};
 pub use hotkey::{HotkeyStatus, status as hotkey_status};
 
 static TOGGLE_REQUESTED: AtomicBool = AtomicBool::new(false);
