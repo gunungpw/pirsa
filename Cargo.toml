@@ -1,6 +1,6 @@
 [package]
 name = "pirsa"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Pirsa — a fast, keyboard-first Windows launcher built with Rust and iced"
@@ -13,7 +13,8 @@ path = "src/main.rs"
 
 [dependencies]
 iced = { version = "0.14", default-features = false, features = [
-    "tiny-skia",
+    "wgpu",
+    "web-colors",
     "tokio",
     "crisp",
     "image-without-codecs",

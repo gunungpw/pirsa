@@ -5,6 +5,15 @@ All notable changes to Pirsa are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-11-20
+
+### Changed
+
+- Switched rendering from the CPU rasterizer (`tiny-skia` via `softbuffer`) to
+  the GPU (`wgpu`, Direct3D 12/Vulkan). The `web-colors` feature keeps
+  gamma-space blending, so the palette and translucent highlights look the same
+  as before.
+
 ## [0.2.0] - 2026-11-20
 
 ### Added

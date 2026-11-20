@@ -32,6 +32,9 @@ Pirsa searches the Start Menu (including Store/UWP apps) and gets out of the way
 - **Focus-aware** — hiding returns focus to the window you came from; clicking
   elsewhere auto-hides the launcher.
 - **Native and small** — one executable, no WebView, no runtime dependencies.
+- **GPU-accelerated** — frames are drawn with `wgpu` on Direct3D 12/Vulkan
+  instead of a CPU rasterizer, using gamma-space (`web-colors`) blending so the
+  palette matches the original design.
 - **Fast start** — the window appears immediately while Start Menu indexing
   finishes in the background.
 - **Proper Windows icon** — embedded in the executable and shortcuts, with
@@ -40,6 +43,7 @@ Pirsa searches the Start Menu (including Store/UWP apps) and gets out of the way
 ## Requirements
 
 - Windows 10 or Windows 11
+- A Direct3D 12 or Vulkan capable adapter for the `wgpu` renderer
 - Rust 1.88 or newer (edition 2024)
 
 ## Build
