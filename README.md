@@ -20,6 +20,12 @@ Pirsa searches the Start Menu (including Store/UWP apps) and gets out of the way
   as Settings and Calculator.
 - **Fuzzy matching** — prefix, substring, word-boundary, acronym (`vsc` →
   Visual Studio Code) and subsequence matches, ranked sensibly.
+- **Frequently used first** — apps you launch most often rise to the top of the
+  list and win close search ties. The history is saved to
+  `%LOCALAPPDATA%\Pirsa\usage.txt`.
+- **Real application icons** — every row shows the app's actual Windows icon,
+  read from the shell for both Start Menu shortcuts and Store apps, with a
+  colored initial tile only as a fallback.
 - **Keyboard-first** — arrow keys to move, Enter to launch, Esc to hide.
 - **One instance** — launching `pirsa.exe` again reveals the running launcher
   instead of starting a second copy.
@@ -124,12 +130,14 @@ src/
   app.rs               launcher state, messages, keyboard handling
   ui.rs                layout, colors, custom widget styles
   search.rs            fuzzy ranking with unit tests
+  usage.rs             persistent launch history for the "frequently used first" order
   util.rs              best-effort logging to %LOCALAPPDATA%\Pirsa
   platform/
     mod.rs             single-instance/hotkey startup and shared flags
     hotkey.rs          Alt+Space via RegisterHotKey
     instance.rs        named mutex + named show event
     apps.rs            Start Menu and AppsFolder scanning, ShellExecute
+    icons.rs           real app icon extraction via IShellItemImageFactory
     window.rs          show/hide, centering, foreground handling
 assets/
   andrsrxn--app-window.svg  source window glyph
@@ -149,11 +157,13 @@ powershell -ExecutionPolicy Bypass -File .\scripts\make-icon.ps1
 
 Logs are written to `%LOCALAPPDATA%\Pirsa\launcher.log`.
 
+## Changelog
+
+Release history is documented in [CHANGELOG.md](CHANGELOG.md).
+
 ## Limitations
 
-- App icons are not extracted; rows use a stable colored initial tile.
 - Only the first eight results are shown; refine the query to narrow further.
-- No recent-apps or usage history yet.
 - Single-user installation; no MSI installer or auto-updater.
 
 ## License

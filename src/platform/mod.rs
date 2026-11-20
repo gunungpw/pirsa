@@ -3,6 +3,7 @@
 
 pub mod apps;
 mod hotkey;
+pub mod icons;
 mod instance;
 pub mod window;
 
@@ -13,6 +14,7 @@ use tokio::sync::broadcast;
 
 pub use apps::{AppEntry, ScanResult, launch, scan};
 pub use hotkey::{HotkeyStatus, status as hotkey_status};
+pub use icons::Icon;
 
 static TOGGLE_REQUESTED: AtomicBool = AtomicBool::new(false);
 static SHOW_REQUESTED: AtomicBool = AtomicBool::new(false);

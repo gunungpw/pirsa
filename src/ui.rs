@@ -1,8 +1,9 @@
 //! The launcher's visual design.
 
 use iced::border;
+use iced::widget::image::Handle;
 use iced::widget::text::Wrapping;
-use iced::widget::{Space, button, column, container, mouse_area, row, text, text_input};
+use iced::widget::{Image, Space, button, column, container, mouse_area, row, text, text_input};
 use iced::{Alignment, Background, Border, Color, Element, Font, Length, Theme};
 
 use crate::app::{Launcher, Message};
@@ -187,8 +188,11 @@ fn result_row(app: &Launcher, app_index: usize, position: usize) -> Element<'_, 
 
     let selected = position == app.selected;
 
+    // `button` places its content at the top-left, so the row has to claim the
+    // full height and center its items itself. Otherwise the selected
+    // highlight extends well below the icon and label.
     let content = row![
-        icon_tile(&entry.name),
+        icon_element(entry, app.icons.get(&entry.name)),
         row![
             text(entry.name.as_str())
                 .size(15)
@@ -214,6 +218,7 @@ fn result_row(app: &Launcher, app_index: usize, position: usize) -> Element<'_, 
         .align_x(Alignment::End),
     ]
     .width(Length::Fill)
+    .height(Length::Fill)
     .align_y(Alignment::Center)
     .spacing(12);
 
@@ -332,6 +337,19 @@ fn status_dot(color: Color) -> Element<'static, Message> {
             ..container::Style::default()
         })
         .into()
+}
+
+/// The real application icon, falling back to the colored initial tile while
+/// icons are still loading (or when the shell cannot provide one).
+fn icon_element<'a>(entry: &'a AppEntry, icon: Option<&Handle>) -> Element<'a, Message> {
+    match icon {
+        Some(handle) => Image::new(handle.clone())
+            .width(30)
+            .height(30)
+            .border_radius(7)
+            .into(),
+        None => icon_tile(&entry.name),
+    }
 }
 
 fn icon_tile(name: &str) -> Element<'_, Message> {

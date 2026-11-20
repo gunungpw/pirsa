@@ -1,10 +1,12 @@
 //! Launcher state and iced update logic.
 
+use std::collections::HashMap;
 use std::time::Duration;
 
 use iced::futures::{StreamExt, stream};
 use iced::keyboard::key::Named;
 use iced::keyboard::{Event as KeyboardEvent, Key, Modifiers};
+use iced::widget::image::Handle;
 use iced::widget::operation;
 use iced::{Element, Event, Subscription, Task, window};
 use tokio::sync::broadcast::error::RecvError;
@@ -12,11 +14,16 @@ use tokio::sync::broadcast::error::RecvError;
 use crate::platform::{self, AppEntry, HotkeyStatus, ScanResult};
 use crate::search;
 use crate::ui;
+use crate::usage::Usage;
 
 /// The application's complete state.
 pub struct Launcher {
     pub(crate) apps: Vec<AppEntry>,
     pub(crate) results: Vec<usize>,
+    /// Launch history: how often each app was opened, used for ordering.
+    pub(crate) usage: Usage,
+    /// Real application icons, keyed by display name.
+    pub(crate) icons: HashMap<String, Handle>,
     pub(crate) query: String,
     pub(crate) selected: usize,
     pub(crate) visible: bool,
@@ -43,6 +50,7 @@ pub enum Message {
     EnsureFocus,
     WindowReady(window::Id, isize),
     ScanComplete(ScanResult),
+    IconsLoaded(Vec<(String, platform::Icon)>),
     Event(Event),
 }
 
@@ -51,6 +59,8 @@ impl Launcher {
         let launcher = Self {
             apps: Vec::new(),
             results: Vec::new(),
+            usage: Usage::load(),
+            icons: HashMap::new(),
             query: String::new(),
             selected: 0,
             visible: platform::start_visible(),
@@ -131,6 +141,14 @@ impl Launcher {
                 self.selected = 0;
 
                 crate::util::log(format!("indexed {count} apps"));
+                self.load_icons()
+            }
+            Message::IconsLoaded(icons) => {
+                for (name, icon) in icons {
+                    self.icons
+                        .insert(name, Handle::from_rgba(icon.width, icon.height, icon.rgba));
+                }
+
                 Task::none()
             }
             Message::WindowReady(id, hwnd) => {
@@ -283,11 +301,18 @@ impl Launcher {
         };
 
         let app = &self.apps[app_index];
+        let key = app.search_key();
+        let name = app.name.clone();
 
         match platform::launch(app) {
-            Ok(()) => self.hide(),
+            Ok(()) => {
+                // Remember the launch before hiding so the next visit already
+                // shows this app near the top of the list.
+                self.usage.record(&key);
+                self.usage.save();
+                self.hide()
+            }
             Err(error) => {
-                let name = app.name.clone();
                 self.error = Some(format!("Could not launch {name}: {error}"));
                 crate::util::log(format!("launch failed for {name}: {error}"));
                 Task::none()
@@ -295,7 +320,7 @@ impl Launcher {
         }
     }
 
-    fn rescan(&mut self) {
+    fn rescan(&mut self) -> Task<Message> {
         let scan = platform::scan();
         let count = scan.apps.len();
 
@@ -310,10 +335,21 @@ impl Launcher {
         self.selected = 0;
 
         crate::util::log(format!("rescanned Start Menu ({count} apps)"));
+        self.load_icons()
+    }
+
+    /// Loads the real application icons in the background.
+    fn load_icons(&self) -> Task<Message> {
+        let apps = self.apps.clone();
+
+        Task::perform(
+            async move { platform::icons::extract(&apps) },
+            Message::IconsLoaded,
+        )
     }
 
     fn recompute(&mut self) {
-        self.results = search::rank(&self.apps, &self.query);
+        self.results = search::rank_with_usage(&self.apps, &self.query, &self.usage);
 
         if self.selected >= self.results.len() {
             self.selected = self.results.len().saturating_sub(1);
@@ -370,10 +406,7 @@ impl Launcher {
             Key::Named(Named::ArrowUp) => self.update(Message::Navigate(-1)),
             Key::Named(Named::ArrowDown) => self.update(Message::Navigate(1)),
             Key::Named(Named::Enter) => self.activate(self.selected),
-            Key::Named(Named::F5) => {
-                self.rescan();
-                Task::none()
-            }
+            Key::Named(Named::F5) => self.rescan(),
             _ => Task::none(),
         }
     }

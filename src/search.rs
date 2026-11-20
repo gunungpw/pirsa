@@ -1,13 +1,19 @@
 ﻿//! Ranking for the launcher's search field.
 
 use crate::platform::apps::AppEntry;
+use crate::usage::{Usage, UsageEntry};
 
-/// Returns application indices ordered from best to worst match.
-pub fn rank(apps: &[AppEntry], query: &str) -> Vec<usize> {
+/// Returns application indices ordered from best to worst match, preferring
+/// apps that are launched often.
+///
+/// With an empty query, frequently used apps move to the front while
+/// everything else keeps its Start Menu order. Search keeps its usual scoring
+/// and only lets usage decide close matches.
+pub fn rank_with_usage(apps: &[AppEntry], query: &str, usage: &Usage) -> Vec<usize> {
     let query = normalize(query);
 
     if query.is_empty() {
-        return (0..apps.len()).collect();
+        return popular(apps, usage);
     }
 
     let tokens: Vec<&str> = query.split_whitespace().collect();
@@ -45,20 +51,46 @@ pub fn rank(apps: &[AppEntry], query: &str) -> Vec<usize> {
             continue;
         }
 
-        // Prefer shorter, more specific application names when scores tie.
+        // Prefer shorter, more specific application names when scores tie,
+        // then apps the user launches often.
         score -= (name.len() as i32).min(40);
-        matches.push((score, name.len(), index));
+        score += usage.score_bonus(&name);
+        matches.push((score, name.len(), index, usage.entry(&name)));
     }
 
     matches.sort_by(|left, right| {
         right
             .0
             .cmp(&left.0)
+            .then_with(|| right.3.launches.cmp(&left.3.launches))
+            .then_with(|| right.3.last_used.cmp(&left.3.last_used))
             .then_with(|| left.1.cmp(&right.1))
             .then_with(|| apps[left.2].name.cmp(&apps[right.2].name))
     });
 
-    matches.into_iter().map(|(_, _, index)| index).collect()
+    matches.into_iter().map(|(_, _, index, _)| index).collect()
+}
+
+/// Orders every app with the most-used ones first.
+///
+/// `sort_by` is stable, so apps without history keep the Start Menu order
+/// (alphabetical) they were indexed with.
+fn popular(apps: &[AppEntry], usage: &Usage) -> Vec<usize> {
+    let mut ranked: Vec<(usize, UsageEntry)> = apps
+        .iter()
+        .enumerate()
+        .map(|(index, app)| (index, usage.entry(&app.search_key())))
+        .collect();
+
+    ranked.sort_by(|left, right| {
+        right
+            .1
+            .launches
+            .cmp(&left.1.launches)
+            .then_with(|| right.1.last_used.cmp(&left.1.last_used))
+    });
+
+    ranked.into_iter().map(|(index, _)| index).collect()
 }
 
 fn score_name(name: &str, query: &str) -> Option<i32> {
@@ -166,6 +198,11 @@ mod tests {
         }
     }
 
+    /// Ranking without any launch history, i.e. the relevance-only order.
+    fn rank(apps: &[AppEntry], query: &str) -> Vec<usize> {
+        rank_with_usage(apps, query, &Usage::default())
+    }
+
     #[test]
     fn empty_query_keeps_every_app() {
         let apps = vec![app("Alpha"), app("Beta")];
@@ -224,5 +261,64 @@ mod tests {
     fn unrelated_query_returns_nothing() {
         let apps = vec![app("Notepad"), app("Calculator")];
         assert!(rank(&apps, "zzzz").is_empty());
+    }
+
+    fn usage_with(entries: &[(&str, u32, u64)]) -> Usage {
+        let mut usage = Usage::default();
+
+        for (key, launches, last_used) in entries {
+            usage.insert(
+                key,
+                UsageEntry {
+                    launches: *launches,
+                    last_used: *last_used,
+                },
+            );
+        }
+
+        usage
+    }
+
+    #[test]
+    fn frequently_used_apps_lead_the_empty_list() {
+        let apps = vec![app("Alpha"), app("Beta"), app("Gamma"), app("Delta")];
+        let usage = usage_with(&[("gamma", 4, 10), ("beta", 1, 20)]);
+
+        assert_eq!(rank_with_usage(&apps, "", &usage), vec![2, 1, 0, 3]);
+    }
+
+    #[test]
+    fn equally_used_apps_are_ordered_by_recency() {
+        let apps = vec![app("Alpha"), app("Beta")];
+        let usage = usage_with(&[("alpha", 3, 10), ("beta", 3, 20)]);
+
+        assert_eq!(rank_with_usage(&apps, "", &usage), vec![1, 0]);
+    }
+
+    #[test]
+    fn empty_query_order_is_unchanged_without_history() {
+        let apps = vec![app("Alpha"), app("Beta")];
+        let usage = usage_with(&[("unknown", 9, 10)]);
+
+        assert_eq!(rank_with_usage(&apps, "", &usage), vec![0, 1]);
+    }
+
+    #[test]
+    fn usage_breaks_close_search_ties() {
+        let apps = vec![app("Plan A"), app("Plan B")];
+
+        assert_eq!(rank(&apps, "plan"), vec![0, 1]);
+        assert_eq!(
+            rank_with_usage(&apps, "plan", &usage_with(&[("plan b", 3, 5)])),
+            vec![1, 0]
+        );
+    }
+
+    #[test]
+    fn usage_does_not_override_an_exact_match() {
+        let apps = vec![app("Code"), app("Codex")];
+        let usage = usage_with(&[("codex", 10, 5)]);
+
+        assert_eq!(rank_with_usage(&apps, "code", &usage), vec![0, 1]);
     }
 }

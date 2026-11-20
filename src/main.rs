@@ -7,6 +7,7 @@ mod app;
 mod platform;
 mod search;
 mod ui;
+mod usage;
 mod util;
 
 use iced::window;
