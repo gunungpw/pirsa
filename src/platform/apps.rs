@@ -4,7 +4,6 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use windows::Win32::Foundation::HWND;
-use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
 use windows::Win32::UI::Shell::Common::{ITEMIDLIST, STRRET};
 use windows::Win32::UI::Shell::{
     ILFree, IShellFolder, SHCONTF_FOLDERS, SHCONTF_NONFOLDERS, SHGDN_FORPARSING, SHGDN_NORMAL,
@@ -13,7 +12,8 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 use windows::core::{PCWSTR, w};
 
-use crate::util::{log, normalize_name};
+use super::com::ComApartment;
+use crate::util::{SearchText, log, normalize_name};
 
 /// Where an application should be launched from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -29,15 +29,53 @@ pub enum LaunchTarget {
 /// A searchable application.
 #[derive(Debug, Clone)]
 pub struct AppEntry {
-    pub name: String,
-    pub detail: String,
-    pub target: LaunchTarget,
+    name: String,
+    detail: String,
+    target: LaunchTarget,
+    name_search: SearchText,
+    detail_search: SearchText,
 }
 
 impl AppEntry {
-    /// Normalized name used for de-duplication and searching.
-    pub fn search_key(&self) -> String {
-        normalize_name(&self.name)
+    /// Builds an entry and precomputes the text used by search.
+    pub fn new(name: String, detail: String, target: LaunchTarget) -> Self {
+        let name_search = SearchText::new(&name);
+        let detail_search = SearchText::new(&detail);
+
+        Self {
+            name,
+            detail,
+            target,
+            name_search,
+            detail_search,
+        }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn detail(&self) -> &str {
+        &self.detail
+    }
+
+    pub fn target(&self) -> &LaunchTarget {
+        &self.target
+    }
+
+    /// Normalized name used for de-duplication, usage history, and searching.
+    pub fn search_key(&self) -> &str {
+        self.name_search.normalized()
+    }
+
+    /// Precomputed text for the display name.
+    pub fn name_search(&self) -> &SearchText {
+        &self.name_search
+    }
+
+    /// Precomputed text for the category/kind detail.
+    pub fn detail_search(&self) -> &SearchText {
+        &self.detail_search
     }
 }
 
@@ -50,7 +88,11 @@ pub struct ScanResult {
 
 /// Discovers Start Menu applications from both shortcut folders and the
 /// Windows `AppsFolder` shell namespace (which includes packaged/UWP apps).
-pub fn scan() -> ScanResult {
+///
+/// Normally called by the scan worker; the COM guard also supports direct
+/// callers such as tests.
+pub(crate) fn scan() -> ScanResult {
+    let _com = ComApartment::new();
     let mut apps = Vec::new();
     let mut seen = HashSet::new();
     let mut warnings = Vec::new();
@@ -69,13 +111,13 @@ pub fn scan() -> ScanResult {
 
     let shortcut_count = apps.len();
 
-    match scan_apps_folder() {
+    match scan_apps_folder_inner() {
         Ok(folder_apps) => {
             let mut added = 0;
 
             for app in folder_apps {
                 let key = app.search_key();
-                if key.is_empty() || !seen.insert(key) {
+                if key.is_empty() || !seen.insert(key.to_owned()) {
                     continue;
                 }
 
@@ -94,10 +136,9 @@ pub fn scan() -> ScanResult {
     }
 
     apps.sort_by(|left, right| {
-        left.name
-            .to_lowercase()
-            .cmp(&right.name.to_lowercase())
-            .then_with(|| left.name.cmp(&right.name))
+        left.search_key()
+            .cmp(right.search_key())
+            .then_with(|| left.name().cmp(right.name()))
     });
 
     ScanResult {
@@ -112,7 +153,7 @@ pub fn scan() -> ScanResult {
 
 /// Launches an application through the Windows shell.
 pub fn launch(app: &AppEntry) -> Result<(), String> {
-    let target = match &app.target {
+    let target = match app.target() {
         LaunchTarget::Shortcut(path) | LaunchTarget::Executable(path) => {
             path.to_string_lossy().into_owned()
         }
@@ -141,7 +182,7 @@ pub fn launch(app: &AppEntry) -> Result<(), String> {
         ));
     }
 
-    log(format!("launched {} via {}", app.name, target));
+    log(format!("launched {} via {}", app.name(), target));
     Ok(())
 }
 
@@ -240,25 +281,12 @@ fn collect_shortcuts(
             .map(|category| format!("Start Menu · {category}"))
             .unwrap_or_else(|| "Start Menu".to_owned());
 
-        apps.push(AppEntry {
-            name: name.to_owned(),
-            detail: category,
-            target: LaunchTarget::Shortcut(path),
-        });
+        apps.push(AppEntry::new(
+            name.to_owned(),
+            category,
+            LaunchTarget::Shortcut(path),
+        ));
     }
-}
-
-fn scan_apps_folder() -> Result<Vec<AppEntry>, String> {
-    let initialized = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
-    let should_uninitialize = initialized.0 >= 0;
-
-    let result = scan_apps_folder_inner();
-
-    if should_uninitialize {
-        unsafe { CoUninitialize() };
-    }
-
-    result
 }
 
 fn scan_apps_folder_inner() -> Result<Vec<AppEntry>, String> {
@@ -331,18 +359,15 @@ fn scan_apps_folder_inner() -> Result<Vec<AppEntry>, String> {
                 continue;
             }
 
-            let key = normalize_name(display_name);
-            if key.is_empty() || !seen.insert(key) {
+            let (target, detail) = classify_apps_folder_target(parsing_name);
+            let app = AppEntry::new(display_name.to_owned(), detail, target);
+            let key = app.search_key();
+
+            if key.is_empty() || !seen.insert(key.to_owned()) {
                 continue;
             }
 
-            let (target, detail) = classify_apps_folder_target(parsing_name);
-
-            apps.push(AppEntry {
-                name: display_name.to_owned(),
-                detail,
-                target,
-            });
+            apps.push(app);
         }
 
         log(format!(

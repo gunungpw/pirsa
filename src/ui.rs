@@ -184,9 +184,9 @@ fn result_row(app: &Launcher, app_index: usize, position: usize) -> Element<'_, 
     // full height and center its items itself. Otherwise the selected
     // highlight extends well below the icon and label.
     let content = row![
-        icon_element(entry, app.icons.get(&entry.name)),
+        icon_element(entry, app.icons.get(entry.name())),
         row![
-            text(entry.name.as_str())
+            text(entry.name())
                 .size(15)
                 .font(semibold_font())
                 .color(TEXT)
@@ -340,7 +340,7 @@ fn icon_element<'a>(entry: &'a AppEntry, icon: Option<&Handle>) -> Element<'a, M
             .height(30)
             .border_radius(7)
             .into(),
-        None => icon_tile(&entry.name),
+        None => icon_tile(entry.name()),
     }
 }
 
@@ -387,14 +387,13 @@ fn initial(name: &str) -> String {
 }
 
 fn inline_detail(entry: &AppEntry) -> &str {
-    entry
-        .detail
-        .strip_prefix("Start Menu · ")
-        .unwrap_or(entry.detail.as_str())
+    let detail = entry.detail();
+
+    detail.strip_prefix("Start Menu · ").unwrap_or(detail)
 }
 
 fn entry_kind(entry: &AppEntry) -> &'static str {
-    match &entry.target {
+    match entry.target() {
         LaunchTarget::Shortcut(_) => "Application",
         LaunchTarget::Executable(_) => "Desktop app",
         LaunchTarget::Shell(_) => "Store app",

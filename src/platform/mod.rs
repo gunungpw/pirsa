@@ -2,9 +2,11 @@
 //! native window control.
 
 pub mod apps;
+mod com;
 mod hotkey;
-pub mod icons;
+mod icons;
 mod instance;
+mod shell;
 pub mod window;
 
 use std::sync::OnceLock;
@@ -12,9 +14,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use tokio::sync::Notify;
 
-pub use apps::{AppEntry, ScanResult, launch, scan};
+pub use apps::{AppEntry, ScanResult, launch};
 pub use hotkey::{HotkeyStatus, status as hotkey_status};
 pub use icons::Icon;
+pub use shell::{extract_icons, scan};
 
 static TOGGLE_REQUESTED: AtomicBool = AtomicBool::new(false);
 static SHOW_REQUESTED: AtomicBool = AtomicBool::new(false);
@@ -39,6 +42,8 @@ pub fn init() -> HotkeyStatus {
         instance::signal_existing();
         std::process::exit(0);
     }
+
+    shell::start();
 
     let (show, quit) = instance::create_events();
     instance::watch(show, "show", request_show);

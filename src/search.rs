@@ -1,8 +1,8 @@
-﻿//! Ranking for the launcher's search field.
+//! Ranking for the launcher's search field.
 
 use crate::platform::apps::AppEntry;
 use crate::usage::{Usage, UsageEntry};
-use crate::util::normalize_name as normalize;
+use crate::util::SearchText;
 
 /// Returns application indices ordered from best to worst match, preferring
 /// apps that are launched often.
@@ -11,30 +11,34 @@ use crate::util::normalize_name as normalize;
 /// everything else keeps its Start Menu order. Search keeps its usual scoring
 /// and only lets usage decide close matches.
 pub fn rank_with_usage(apps: &[AppEntry], query: &str, usage: &Usage) -> Vec<usize> {
-    let query = normalize(query);
+    let query = SearchText::new(query);
 
     if query.is_empty() {
         return popular(apps, usage);
     }
 
-    let tokens: Vec<&str> = query.split_whitespace().collect();
+    let tokens: Vec<SearchText> = query
+        .normalized()
+        .split_whitespace()
+        .map(SearchText::new)
+        .collect();
     let mut matches = Vec::with_capacity(apps.len());
 
     for (index, app) in apps.iter().enumerate() {
-        let name = normalize(&app.name);
-        let detail = normalize(&app.detail);
+        let name = app.name_search();
+        let detail = app.detail_search();
 
         if name.is_empty() {
             continue;
         }
 
-        let mut score = score_name(&name, &query).unwrap_or(0);
+        let mut score = score_name(name, &query).unwrap_or(0);
         let mut matched = score > 0;
 
         for token in &tokens {
-            let token_score = score_name(&name, token)
+            let token_score = score_name(name, token)
                 .map(|score| score + 40)
-                .or_else(|| score_name(&detail, token));
+                .or_else(|| score_name(detail, token));
 
             match token_score {
                 Some(token_score) => {
@@ -54,9 +58,10 @@ pub fn rank_with_usage(apps: &[AppEntry], query: &str, usage: &Usage) -> Vec<usi
 
         // Prefer shorter, more specific application names when scores tie,
         // then apps the user launches often.
+        let usage_entry = usage.entry(name.normalized());
         score -= (name.len() as i32).min(40);
-        score += usage.score_bonus(&name);
-        matches.push((score, name.len(), index, usage.entry(&name)));
+        score += usage_entry.score_bonus();
+        matches.push((score, name.len(), index, usage_entry));
     }
 
     matches.sort_by(|left, right| {
@@ -66,7 +71,7 @@ pub fn rank_with_usage(apps: &[AppEntry], query: &str, usage: &Usage) -> Vec<usi
             .then_with(|| right.3.launches.cmp(&left.3.launches))
             .then_with(|| right.3.last_used.cmp(&left.3.last_used))
             .then_with(|| left.1.cmp(&right.1))
-            .then_with(|| apps[left.2].name.cmp(&apps[right.2].name))
+            .then_with(|| apps[left.2].name().cmp(apps[right.2].name()))
     });
 
     matches.into_iter().map(|(_, _, index, _)| index).collect()
@@ -80,7 +85,7 @@ fn popular(apps: &[AppEntry], usage: &Usage) -> Vec<usize> {
     let mut ranked: Vec<(usize, UsageEntry)> = apps
         .iter()
         .enumerate()
-        .map(|(index, app)| (index, usage.entry(&app.search_key())))
+        .map(|(index, app)| (index, usage.entry(app.search_key())))
         .collect();
 
     ranked.sort_by(|left, right| {
@@ -94,20 +99,23 @@ fn popular(apps: &[AppEntry], usage: &Usage) -> Vec<usize> {
     ranked.into_iter().map(|(index, _)| index).collect()
 }
 
-fn score_name(name: &str, query: &str) -> Option<i32> {
+fn score_name(text: &SearchText, query: &SearchText) -> Option<i32> {
     if query.is_empty() {
         return Some(0);
     }
 
-    if name == query {
+    let name = text.normalized();
+    let query_text = query.normalized();
+
+    if name == query_text {
         return Some(2_000);
     }
 
-    if name.starts_with(query) {
-        return Some(1_500 - (name.len() as i32 - query.len() as i32).min(300));
+    if name.starts_with(query_text) {
+        return Some(1_500 - text.len().saturating_sub(query.len()).min(300) as i32);
     }
 
-    if let Some(position) = name.find(query) {
+    if let Some(position) = name.find(query_text) {
         let boundary = if position == 0 || is_word_boundary(name, position) {
             250
         } else {
@@ -117,25 +125,23 @@ fn score_name(name: &str, query: &str) -> Option<i32> {
         return Some(1_050 + boundary - position as i32 * 4);
     }
 
-    let acronym = acronym(name);
-    if acronym == query {
+    let acronym = text.acronym();
+    if acronym == query_text {
         return Some(1_000);
     }
 
-    if acronym.starts_with(query) {
-        return Some(850 - (acronym.len() as i32 - query.len() as i32).min(200));
+    if acronym.starts_with(query_text) {
+        return Some(850 - text.acronym_len().saturating_sub(query.len()).min(200) as i32);
     }
 
-    subsequence_score(name, query)
+    subsequence_score(text.characters(), query.characters())
 }
 
-fn subsequence_score(name: &str, query: &str) -> Option<i32> {
-    let name_chars: Vec<char> = name.chars().collect();
-    let query_chars: Vec<char> = query.chars().collect();
+fn subsequence_score(name_chars: &[char], query_chars: &[char]) -> Option<i32> {
     let mut positions = Vec::with_capacity(query_chars.len());
     let mut name_index = 0;
 
-    for query_char in &query_chars {
+    for query_char in query_chars {
         let found = name_chars[name_index..]
             .iter()
             .position(|candidate| candidate == query_char)?;
@@ -148,17 +154,11 @@ fn subsequence_score(name: &str, query: &str) -> Option<i32> {
     let gaps = span.saturating_sub(query_chars.len()) as i32;
     let boundary_bonus = positions
         .iter()
-        .filter(|position| is_char_boundary(&name_chars, **position))
+        .filter(|position| is_char_boundary(name_chars, **position))
         .count() as i32
         * 35;
 
     Some(550 + boundary_bonus - gaps * 9 - positions.first().copied().unwrap_or(0) as i32 * 2)
-}
-
-fn acronym(name: &str) -> String {
-    name.split_whitespace()
-        .filter_map(|word| word.chars().next())
-        .collect()
 }
 
 fn is_word_boundary(text: &str, byte_position: usize) -> bool {
@@ -184,11 +184,11 @@ mod tests {
     use crate::platform::apps::LaunchTarget;
 
     fn app(name: &str) -> AppEntry {
-        AppEntry {
-            name: name.to_owned(),
-            detail: "Start Menu".to_owned(),
-            target: LaunchTarget::Shell(format!("test:{name}")),
-        }
+        AppEntry::new(
+            name.to_owned(),
+            "Start Menu".to_owned(),
+            LaunchTarget::Shell(format!("test:{name}")),
+        )
     }
 
     /// Ranking without any launch history, i.e. the relevance-only order.
@@ -237,8 +237,11 @@ mod tests {
 
     #[test]
     fn details_can_match() {
-        let mut settings = app("Settings");
-        settings.detail = "Windows app".to_owned();
+        let settings = AppEntry::new(
+            "Settings".to_owned(),
+            "Windows app".to_owned(),
+            LaunchTarget::Shell("test:settings".to_owned()),
+        );
         let apps = vec![settings, app("Notepad")];
 
         assert_eq!(rank(&apps, "windows"), vec![0]);

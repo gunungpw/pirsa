@@ -13,18 +13,18 @@ use windows::Win32::Graphics::Gdi::{
     BI_RGB, BITMAP, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleDC, DIB_RGB_COLORS, DeleteDC,
     DeleteObject, GetDIBits, GetObjectW, HBITMAP, HDC, HGDIOBJ, SelectObject,
 };
-use windows::Win32::System::Com::{COINIT_APARTMENTTHREADED, CoInitializeEx, CoUninitialize};
 use windows::Win32::UI::Shell::{
     IShellItemImageFactory, SHCreateItemFromParsingName, SIIGBF_ICONONLY,
 };
 use windows::core::PCWSTR;
 
+use super::com::ComApartment;
 use crate::platform::apps::{AppEntry, LaunchTarget};
 use crate::util::log;
 
 /// Size requested from the shell. Larger than the 30 px row tile so the icon
 /// stays crisp on scaled displays.
-const ICON_SIZE: i32 = 48;
+const ICON_SIZE: i32 = 64;
 /// Sanity bound for a bitmap the shell reports back.
 const MAX_ICON_SIDE: i32 = 512;
 
@@ -40,18 +40,16 @@ pub struct Icon {
 }
 
 /// Extracts an icon for every app the shell can provide one for.
-pub fn extract(apps: &[AppEntry]) -> Vec<(String, Icon)> {
-    let initialized = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
-    let should_uninitialize = initialized.0 >= 0;
+///
+/// Normally called by the icon worker; the COM guard also supports direct
+/// callers such as tests.
+pub(crate) fn extract(apps: &[AppEntry]) -> Vec<(String, Icon)> {
+    let _com = ComApartment::new();
 
     let icons: Vec<(String, Icon)> = apps
         .iter()
-        .filter_map(|app| icon_for(&app.target).map(|icon| (app.name.clone(), icon)))
+        .filter_map(|app| icon_for(app.target()).map(|icon| (app.name().to_owned(), icon)))
         .collect();
-
-    if should_uninitialize {
-        unsafe { CoUninitialize() };
-    }
 
     log(format!(
         "loaded {} app icons for {} apps",
@@ -223,11 +221,11 @@ mod tests {
             return;
         };
 
-        let apps = vec![AppEntry {
-            name: "Notepad".to_owned(),
-            detail: "Test".to_owned(),
+        let apps = vec![AppEntry::new(
+            "Notepad".to_owned(),
+            "Test".to_owned(),
             target,
-        }];
+        )];
         let icons = extract(&apps);
 
         assert_eq!(icons.len(), 1, "notepad.exe should have an icon");

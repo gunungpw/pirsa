@@ -33,6 +33,10 @@ pub struct Launcher {
     pub(crate) error: Option<String>,
     pub(crate) warning: Option<String>,
     pub(crate) indexing: bool,
+    /// Monotonic token for the newest scan; older results are discarded.
+    pub(crate) scan_generation: u64,
+    /// Monotonic token for the newest icon batch; older results are discarded.
+    pub(crate) icon_generation: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -47,14 +51,20 @@ pub enum Message {
     Platform,
     EnsureFocus,
     WindowReady(window::Id, isize),
-    ScanComplete(ScanResult),
-    IconsLoaded(Vec<(String, platform::Icon)>),
+    ScanComplete {
+        generation: u64,
+        scan: ScanResult,
+    },
+    IconsLoaded {
+        generation: u64,
+        icons: Vec<(String, platform::Icon)>,
+    },
     Event(Event),
 }
 
 impl Launcher {
     pub fn boot() -> (Self, Task<Message>) {
-        let launcher = Self {
+        let mut launcher = Self {
             apps: Vec::new(),
             results: Vec::new(),
             usage: Usage::load(),
@@ -69,6 +79,8 @@ impl Launcher {
             error: None,
             warning: None,
             indexing: true,
+            scan_generation: 0,
+            icon_generation: 0,
         };
 
         let ready: Task<Message> = window::oldest().and_then(|id| {
@@ -76,8 +88,8 @@ impl Launcher {
         });
 
         // Do not block window creation on the Start Menu scan. The window
-        // appears immediately while indexing finishes on the executor.
-        let scan = scan_task();
+        // appears immediately while the shell worker indexes in the background.
+        let scan = launcher.begin_scan();
 
         let task = if launcher.visible {
             Task::batch([ready, focus_input(), scan])
@@ -125,8 +137,12 @@ impl Launcher {
                 .unwrap_or_else(Task::none),
             Message::Platform => self.tick(),
             Message::EnsureFocus => self.ensure_focus(),
-            Message::ScanComplete(scan) => self.apply_scan(scan),
-            Message::IconsLoaded(icons) => {
+            Message::ScanComplete { generation, scan } => self.apply_scan(generation, scan),
+            Message::IconsLoaded { generation, icons } => {
+                if generation != self.icon_generation {
+                    return Task::none();
+                }
+
                 for (name, icon) in icons {
                     self.icons
                         .insert(name, Handle::from_rgba(icon.width, icon.height, icon.rgba));
@@ -276,9 +292,12 @@ impl Launcher {
             return Task::none();
         };
 
-        let app = &self.apps[app_index];
-        let key = app.search_key();
-        let name = app.name.clone();
+        let Some(app) = self.apps.get(app_index) else {
+            return Task::none();
+        };
+
+        let key = app.search_key().to_owned();
+        let name = app.name().to_owned();
 
         match platform::launch(app) {
             Ok(()) => {
@@ -296,14 +315,39 @@ impl Launcher {
         }
     }
 
-    fn rescan(&mut self) -> Task<Message> {
+    /// Starts an asynchronous scan and tags it with a new generation.
+    fn begin_scan(&mut self) -> Task<Message> {
+        self.scan_generation = self.scan_generation.wrapping_add(1);
+        let generation = self.scan_generation;
         self.indexing = true;
-        scan_task()
+
+        Task::perform(platform::scan(), move |scan| Message::ScanComplete {
+            generation,
+            scan,
+        })
+    }
+
+    fn rescan(&mut self) -> Task<Message> {
+        // The scan worker serializes scans, so queueing another one while a
+        // scan is running only delays the result the user is waiting for.
+        if self.indexing {
+            return Task::none();
+        }
+
+        self.begin_scan()
     }
 
     /// Replaces the indexed apps and refreshes the visible results. Shared by
     /// the startup scan and F5 so both follow the same rules.
-    fn apply_scan(&mut self, scan: ScanResult) -> Task<Message> {
+    fn apply_scan(&mut self, generation: u64, scan: ScanResult) -> Task<Message> {
+        if generation != self.scan_generation {
+            crate::util::log(format!(
+                "ignoring stale scan {generation} (current {})",
+                self.scan_generation
+            ));
+            return Task::none();
+        }
+
         let count = scan.apps.len();
 
         self.apps = scan.apps;
@@ -329,14 +373,15 @@ impl Launcher {
         self.selected = 0;
     }
 
-    /// Loads the real application icons in the background.
-    fn load_icons(&self) -> Task<Message> {
+    /// Loads the real application icons on the shell worker.
+    fn load_icons(&mut self) -> Task<Message> {
+        self.icon_generation = self.icon_generation.wrapping_add(1);
+        let generation = self.icon_generation;
         let apps = self.apps.clone();
 
-        Task::perform(
-            async move { platform::icons::extract(&apps) },
-            Message::IconsLoaded,
-        )
+        Task::perform(platform::extract_icons(apps), move |icons| {
+            Message::IconsLoaded { generation, icons }
+        })
     }
 
     fn recompute(&mut self) {
@@ -409,10 +454,6 @@ fn focus_input() -> Task<Message> {
     operation::focus::<Message>(ui::INPUT_ID)
 }
 
-fn scan_task() -> Task<Message> {
-    Task::perform(async { platform::scan() }, Message::ScanComplete)
-}
-
 fn ensure_focus_later() -> Task<Message> {
     Task::future(async {
         tokio::time::sleep(Duration::from_millis(140)).await;
@@ -440,6 +481,8 @@ mod tests {
             error: None,
             warning: None,
             indexing: false,
+            scan_generation: 0,
+            icon_generation: 0,
         }
     }
 
@@ -452,5 +495,34 @@ mod tests {
 
         let _ = launcher.update(Message::Navigate(-100));
         assert_eq!(launcher.selected, 0);
+    }
+
+    #[test]
+    fn stale_scan_results_are_ignored() {
+        let mut launcher = launcher_with_results(0);
+        launcher.scan_generation = 2;
+        launcher.indexing = true;
+
+        let _ = launcher.apply_scan(
+            1,
+            ScanResult {
+                apps: Vec::new(),
+                warning: None,
+            },
+        );
+
+        assert!(launcher.apps.is_empty());
+        assert!(launcher.indexing);
+    }
+
+    #[test]
+    fn rescan_is_ignored_while_indexing() {
+        let mut launcher = launcher_with_results(0);
+        launcher.scan_generation = 1;
+        launcher.indexing = true;
+
+        let _ = launcher.rescan();
+
+        assert_eq!(launcher.scan_generation, 1);
     }
 }

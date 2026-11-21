@@ -31,6 +31,14 @@ pub struct UsageEntry {
     pub last_used: u64,
 }
 
+impl UsageEntry {
+    /// Ranking bonus for this entry, between 0 and
+    /// `BONUS_LAUNCHES * BONUS_PER_LAUNCH`.
+    pub fn score_bonus(&self) -> i32 {
+        self.launches.min(BONUS_LAUNCHES) as i32 * BONUS_PER_LAUNCH
+    }
+}
+
 /// In-memory launch history.
 #[derive(Debug, Clone, Default)]
 pub struct Usage {
@@ -163,13 +171,6 @@ impl Usage {
     pub fn entry(&self, key: &str) -> UsageEntry {
         self.entries.get(key).copied().unwrap_or_default()
     }
-
-    /// Ranking bonus earned by `key`, between 0 and
-    /// `BONUS_LAUNCHES * BONUS_PER_LAUNCH`.
-    pub fn score_bonus(&self, key: &str) -> i32 {
-        let launches = self.entry(key).launches.min(BONUS_LAUNCHES);
-        launches as i32 * BONUS_PER_LAUNCH
-    }
 }
 
 fn history_path() -> PathBuf {
@@ -215,7 +216,7 @@ mod tests {
         let usage = Usage::load_from(&path);
 
         assert_eq!(usage.entry("notepad"), UsageEntry::default());
-        assert_eq!(usage.score_bonus("notepad"), 0);
+        assert_eq!(usage.entry("notepad").score_bonus(), 0);
     }
 
     #[test]
@@ -315,9 +316,9 @@ mod tests {
         );
 
         assert_eq!(
-            usage.score_bonus("notepad"),
+            usage.entry("notepad").score_bonus(),
             BONUS_LAUNCHES as i32 * BONUS_PER_LAUNCH
         );
-        assert_eq!(usage.score_bonus("missing"), 0);
+        assert_eq!(usage.entry("missing").score_bonus(), 0);
     }
 }

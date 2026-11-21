@@ -144,9 +144,11 @@ src/
   usage.rs             persistent launch history for the "frequently used first" order
   util.rs              best-effort logging to %LOCALAPPDATA%\Pirsa
   platform/
-    mod.rs             single-instance/hotkey startup and shared flags
+    mod.rs             startup, shared request flags, platform re-exports
+    com.rs             RAII STA COM apartment guard
     hotkey.rs          Alt+Space via RegisterHotKey
-    instance.rs        named mutex + named show event
+    instance.rs        named mutex + named show/quit events
+    shell.rs           dedicated shell worker for scans and icons
     apps.rs            Start Menu and AppsFolder scanning, ShellExecute
     icons.rs           real app icon extraction via IShellItemImageFactory
     window.rs          show/hide, centering, foreground handling

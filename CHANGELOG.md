@@ -5,6 +5,34 @@ All notable changes to Pirsa are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- Start Menu enumeration and icon extraction now run on one dedicated,
+  long-lived shell thread that initializes COM as an STA. This keeps blocking
+  shell work off executor threads and gives every shell call a consistent
+  apartment.
+- Search metadata is precomputed when apps are indexed: normalized names,
+  character vectors, acronyms, and character lengths are stored in each
+  `AppEntry`. Rankings no longer normalize every app on every keystroke or
+  allocate temporary name/acronym vectors.
+- App lists are sorted by the precomputed search key instead of allocating a
+  lowercase string for every comparison.
+- Usage ranking now uses one history lookup per matched app instead of two.
+- Requested icon size is 64 px so icons stay crisp on higher-DPI displays.
+
+### Fixed
+
+- Scan and icon jobs carry generation tokens. If an older scan or icon batch
+  finishes late, it can no longer overwrite newer results.
+- F5 is ignored while a scan is already running, preventing duplicate queued
+  scans on the shell worker.
+- `AppEntry` names and details are read-only with precomputed search text, so
+  they cannot drift out of sync with the ranker.
+- A failed shell worker now returns a visible indexing warning instead of
+  silently leaving the launcher empty.
+
 ## [0.4.0] - 2026-11-21
 
 ### Added
