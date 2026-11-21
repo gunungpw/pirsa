@@ -1,35 +1,33 @@
 //! Single-instance handling and "open the existing instance" signalling.
 
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicIsize, Ordering};
 use std::thread;
 
-use windows::Win32::Foundation::{ERROR_ALREADY_EXISTS, HANDLE, WAIT_OBJECT_0};
+use windows::Win32::Foundation::{
+    CloseHandle, ERROR_ALREADY_EXISTS, ERROR_SUCCESS, GetLastError, HANDLE, SetLastError,
+    WAIT_OBJECT_0,
+};
 use windows::Win32::System::Threading::{
     CreateEventW, CreateMutexW, EVENT_MODIFY_STATE, INFINITE, OpenEventW, SetEvent,
     WaitForSingleObject,
 };
-use windows::core::w;
+use windows::core::{PCWSTR, w};
 
-use crate::platform::request_show;
 use crate::util::log;
-
-static MUTEX_HANDLE: AtomicIsize = AtomicIsize::new(0);
-static SHOW_EVENT: AtomicIsize = AtomicIsize::new(0);
 
 /// Returns `true` when this process owns the single-instance mutex.
 pub fn claim() -> bool {
+    // Clear the thread's last error so ERROR_ALREADY_EXISTS can only come from
+    // this call.
+    unsafe { SetLastError(ERROR_SUCCESS) };
     let mutex = unsafe { CreateMutexW(None, false, w!("Local\\Pirsa.SingleInstance.v1")) };
+    let last_error = unsafe { GetLastError() };
 
     match mutex {
-        Ok(handle) => {
-            // The handle is intentionally kept open for the process lifetime.
-            MUTEX_HANDLE.store(handle.0 as isize, Ordering::Relaxed);
-
-            let already_running = std::io::Error::last_os_error().raw_os_error()
-                == Some(ERROR_ALREADY_EXISTS.0 as i32);
-
-            !already_running
+        Ok(_handle) => {
+            // The mutex handle is intentionally never closed: Windows releases
+            // it when the process exits, which is exactly what we want.
+            last_error != ERROR_ALREADY_EXISTS
         }
         Err(error) => {
             log(format!(
@@ -40,46 +38,28 @@ pub fn claim() -> bool {
     }
 }
 
-/// Creates the named event that later instances use to ask this instance to
-/// show its window.
-pub fn create_show_event() -> Option<isize> {
-    match unsafe { CreateEventW(None, false, false, w!("Local\\Pirsa.Show.v1")) } {
-        Ok(handle) => {
-            let raw = handle.0 as isize;
-            SHOW_EVENT.store(raw, Ordering::Relaxed);
-            log("created single-instance show event");
-            Some(raw)
-        }
-        Err(error) => {
-            log(format!("could not create the show event: {error}"));
-            None
-        }
-    }
+/// Creates the events a second process (or the installer) uses to ask this
+/// instance to show its window or quit.
+pub fn create_events() -> (Option<isize>, Option<isize>) {
+    (
+        create_event(w!("Local\\Pirsa.Show.v1"), "show event"),
+        create_event(w!("Local\\Pirsa.Quit.v1"), "quit event"),
+    )
 }
 
 /// Asks an already-running launcher to show itself. Used by a second process.
 pub fn signal_existing() {
-    match unsafe { OpenEventW(EVENT_MODIFY_STATE, false, w!("Local\\Pirsa.Show.v1")) } {
-        Ok(handle) => {
-            let _ = unsafe { SetEvent(handle) };
-            log("signalled the running launcher to show");
-        }
-        Err(error) => {
-            log(format!(
-                "could not open the running launcher's show event: {error}"
-            ));
-        }
-    }
+    signal_event(w!("Local\\Pirsa.Show.v1"), "show event");
 }
 
-/// Watches the show event for the lifetime of the process.
-pub fn watch_show_event(raw: isize) {
-    if raw == 0 {
+/// Watches one of the created events for the lifetime of the process.
+pub fn watch(raw: Option<isize>, label: &'static str, on_signal: fn()) {
+    let Some(raw) = raw.filter(|raw| *raw != 0) else {
         return;
-    }
+    };
 
-    let _ = thread::Builder::new()
-        .name("pirsa-single-instance".to_owned())
+    let spawn = thread::Builder::new()
+        .name(format!("pirsa-{label}"))
         .spawn(move || {
             let event = HANDLE(raw as *mut c_void);
 
@@ -87,11 +67,43 @@ pub fn watch_show_event(raw: isize) {
                 let wait = unsafe { WaitForSingleObject(event, INFINITE) };
 
                 if wait != WAIT_OBJECT_0 {
-                    log(format!("show-event wait ended unexpectedly: {wait:?}"));
+                    log(format!("{label} wait ended unexpectedly: {wait:?}"));
                     break;
                 }
 
-                request_show();
+                on_signal();
             }
         });
+
+    if let Err(error) = spawn {
+        log(format!("could not start the {label} watcher: {error}"));
+    }
+}
+
+fn create_event(name: PCWSTR, label: &str) -> Option<isize> {
+    match unsafe { CreateEventW(None, false, false, name) } {
+        Ok(handle) => {
+            log(format!("created single-instance {label}"));
+            Some(handle.0 as isize)
+        }
+        Err(error) => {
+            log(format!("could not create the {label}: {error}"));
+            None
+        }
+    }
+}
+
+fn signal_event(name: PCWSTR, label: &str) {
+    match unsafe { OpenEventW(EVENT_MODIFY_STATE, false, name) } {
+        Ok(handle) => {
+            let _ = unsafe { SetEvent(handle) };
+            let _ = unsafe { CloseHandle(handle) };
+            log(format!("signalled the running launcher's {label}"));
+        }
+        Err(error) => {
+            log(format!(
+                "could not open the running launcher's {label}: {error}"
+            ));
+        }
+    }
 }

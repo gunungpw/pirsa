@@ -81,8 +81,15 @@ also start Pirsa automatically at login:
 powershell -ExecutionPolicy Bypass -File .\scripts\install.ps1 -Startup
 ```
 
-Remove `-Startup` if you prefer to launch Pirsa manually. Add `-NoLaunch` to
-install without starting it immediately.
+Remove `-Startup` if you prefer to launch Pirsa manually (this also removes a
+previously created startup shortcut). Add `-NoLaunch` to install without
+starting it immediately.
+
+Re-running the script upgrades in place. If Pirsa is already running, the
+script asks it to quit through its named quit event, waits for the process to
+exit, and only falls back to force-stopping it if it does not respond. The build
+happens before the running copy is touched, so a failed build leaves the
+existing installation running.
 
 The app has no tray icon. To quit, open Pirsa and click **Quit** in the footer
 (or press **Ctrl+Q** while it is focused).
@@ -98,7 +105,7 @@ The app has no tray icon. To quit, open Pirsa and click **Quit** in the footer
 | `Ctrl+Q` | Quit Pirsa |
 | `F5` | Rescan the Start Menu |
 | Click a row | Launch that app |
-| Drag the header | Move the window |
+| Drag the app-list heading | Move the window |
 
 ## How indexing works
 

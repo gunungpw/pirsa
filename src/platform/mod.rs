@@ -10,7 +10,7 @@ pub mod window;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use tokio::sync::broadcast;
+use tokio::sync::Notify;
 
 pub use apps::{AppEntry, ScanResult, launch, scan};
 pub use hotkey::{HotkeyStatus, status as hotkey_status};
@@ -18,8 +18,18 @@ pub use icons::Icon;
 
 static TOGGLE_REQUESTED: AtomicBool = AtomicBool::new(false);
 static SHOW_REQUESTED: AtomicBool = AtomicBool::new(false);
+static QUIT_REQUESTED: AtomicBool = AtomicBool::new(false);
 static START_VISIBLE: AtomicBool = AtomicBool::new(false);
-static SIGNAL: OnceLock<broadcast::Sender<()>> = OnceLock::new();
+static SIGNAL: OnceLock<Notify> = OnceLock::new();
+
+/// Requests collected from the hotkey thread, a second launcher process, or the
+/// installer. Reading them clears each flag, so a request is handled once.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct Requests {
+    pub show: bool,
+    pub toggle: bool,
+    pub quit: bool,
+}
 
 /// Must be called once, before the iced application is created.
 ///
@@ -30,8 +40,9 @@ pub fn init() -> HotkeyStatus {
         std::process::exit(0);
     }
 
-    let event = instance::create_show_event();
-    instance::watch_show_event(event.unwrap_or_default());
+    let (show, quit) = instance::create_events();
+    instance::watch(show, "show", request_show);
+    instance::watch(quit, "quit", request_quit);
 
     let status = hotkey::start();
 
@@ -58,23 +69,29 @@ pub fn request_toggle() {
     signal();
 }
 
-/// Creates a subscription to launcher wake-up signals.
-pub fn subscribe() -> broadcast::Receiver<()> {
-    signal_sender().subscribe()
+pub fn request_quit() {
+    QUIT_REQUESTED.store(true, Ordering::SeqCst);
+    signal();
 }
 
-fn signal_sender() -> &'static broadcast::Sender<()> {
-    SIGNAL.get_or_init(|| broadcast::channel(16).0)
+/// Returns the notifier that wakes up the iced subscription.
+pub fn subscribe() -> &'static Notify {
+    signal_notifier()
+}
+
+/// Returns every pending request and clears the flags.
+pub fn take_requests() -> Requests {
+    Requests {
+        show: SHOW_REQUESTED.swap(false, Ordering::SeqCst),
+        toggle: TOGGLE_REQUESTED.swap(false, Ordering::SeqCst),
+        quit: QUIT_REQUESTED.swap(false, Ordering::SeqCst),
+    }
+}
+
+fn signal_notifier() -> &'static Notify {
+    SIGNAL.get_or_init(Notify::new)
 }
 
 fn signal() {
-    let _ = signal_sender().send(());
-}
-
-/// Returns `(show_requested, toggle_requested)` and clears both flags.
-pub fn take_requests() -> (bool, bool) {
-    (
-        SHOW_REQUESTED.swap(false, Ordering::SeqCst),
-        TOGGLE_REQUESTED.swap(false, Ordering::SeqCst),
-    )
+    signal_notifier().notify_one();
 }

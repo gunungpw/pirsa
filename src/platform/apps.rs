@@ -13,7 +13,7 @@ use windows::Win32::UI::Shell::{
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 use windows::core::{PCWSTR, w};
 
-use crate::util::log;
+use crate::util::{log, normalize_name};
 
 /// Where an application should be launched from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -402,20 +402,6 @@ fn folder_display_name(
 
         String::from_utf16(&buffer[..length]).ok()
     }
-}
-
-fn normalize_name(name: &str) -> String {
-    let mut normalized = String::with_capacity(name.len());
-
-    for character in name.chars() {
-        if character.is_alphanumeric() {
-            normalized.extend(character.to_lowercase());
-        } else if !normalized.ends_with(' ') {
-            normalized.push(' ');
-        }
-    }
-
-    normalized.trim().to_owned()
 }
 
 fn wide(value: &str) -> Vec<u16> {

@@ -9,7 +9,6 @@ use iced::keyboard::{Event as KeyboardEvent, Key, Modifiers};
 use iced::widget::image::Handle;
 use iced::widget::operation;
 use iced::{Element, Event, Subscription, Task, window};
-use tokio::sync::broadcast::error::RecvError;
 
 use crate::platform::{self, AppEntry, HotkeyStatus, ScanResult};
 use crate::search;
@@ -46,7 +45,6 @@ pub enum Message {
     Quit,
     DragWindow,
     Platform,
-    Tick,
     EnsureFocus,
     WindowReady(window::Id, isize),
     ScanComplete(ScanResult),
@@ -79,7 +77,7 @@ impl Launcher {
 
         // Do not block window creation on the Start Menu scan. The window
         // appears immediately while indexing finishes on the executor.
-        let scan = Task::perform(async { platform::scan() }, Message::ScanComplete);
+        let scan = scan_task();
 
         let task = if launcher.visible {
             Task::batch([ready, focus_input(), scan])
@@ -103,11 +101,12 @@ impl Launcher {
                 self.query.clear();
                 self.error = None;
                 self.recompute();
+                self.selected = 0;
                 Task::none()
             }
             Message::Navigate(delta) => {
                 if !self.results.is_empty() {
-                    let last = self.results.len() - 1;
+                    let last = self.results.len().min(ui::MAX_RESULTS) - 1;
                     self.selected = if delta < 0 {
                         self.selected.saturating_sub(delta.unsigned_abs() as usize)
                     } else {
@@ -124,25 +123,9 @@ impl Launcher {
                 .window_id
                 .map(window::drag::<Message>)
                 .unwrap_or_else(Task::none),
-            Message::Platform | Message::Tick => self.tick(),
+            Message::Platform => self.tick(),
             Message::EnsureFocus => self.ensure_focus(),
-            Message::ScanComplete(scan) => {
-                let count = scan.apps.len();
-
-                self.apps = scan.apps;
-                self.warning = scan.warning;
-                self.indexing = false;
-                self.error = if count == 0 {
-                    Some("No Start Menu applications were found.".to_owned())
-                } else {
-                    None
-                };
-                self.recompute();
-                self.selected = 0;
-
-                crate::util::log(format!("indexed {count} apps"));
-                self.load_icons()
-            }
+            Message::ScanComplete(scan) => self.apply_scan(scan),
             Message::IconsLoaded(icons) => {
                 for (name, icon) in icons {
                     self.icons
@@ -181,20 +164,15 @@ impl Launcher {
 
     pub fn subscription(&self) -> Subscription<Message> {
         let platform_signals = Subscription::run(|| {
-            let receiver = platform::subscribe();
-
-            // Check any request that arrived before the UI was ready, then
-            // wait without polling.
-            let initial = stream::once(async { Message::Tick });
-            let updates = stream::unfold(receiver, |mut receiver| async move {
-                match receiver.recv().await {
-                    Ok(()) => Some((Message::Platform, receiver)),
-                    Err(RecvError::Lagged(_)) => Some((Message::Tick, receiver)),
-                    Err(RecvError::Closed) => None,
-                }
-            });
-
-            initial.chain(updates)
+            // Deliver a first message so requests that arrived before the UI
+            // was ready are handled, then wait for the next notification.
+            stream::once(async { Message::Platform }).chain(stream::unfold(
+                platform::subscribe(),
+                |notifier| async move {
+                    notifier.notified().await;
+                    Some((Message::Platform, notifier))
+                },
+            ))
         });
 
         Subscription::batch([
@@ -207,13 +185,17 @@ impl Launcher {
     }
 
     fn tick(&mut self) -> Task<Message> {
-        let (show, toggle) = platform::take_requests();
+        let requests = platform::take_requests();
 
-        if show {
+        if requests.quit {
+            return iced::exit();
+        }
+
+        if requests.show {
             return self.show();
         }
 
-        if toggle {
+        if requests.toggle {
             return self.toggle();
         }
 
@@ -249,10 +231,7 @@ impl Launcher {
 
         self.visible = true;
         self.focused = false;
-        self.query.clear();
-        self.error = None;
-        self.recompute();
-        self.selected = 0;
+        self.reset_search();
 
         let mut tasks = Vec::with_capacity(3);
 
@@ -285,10 +264,7 @@ impl Launcher {
 
         self.visible = false;
         self.focused = false;
-        self.query.clear();
-        self.error = None;
-        self.recompute();
-        self.selected = 0;
+        self.reset_search();
 
         self.window_id
             .map(|id| window::set_mode::<Message>(id, window::Mode::Hidden))
@@ -321,11 +297,18 @@ impl Launcher {
     }
 
     fn rescan(&mut self) -> Task<Message> {
-        let scan = platform::scan();
+        self.indexing = true;
+        scan_task()
+    }
+
+    /// Replaces the indexed apps and refreshes the visible results. Shared by
+    /// the startup scan and F5 so both follow the same rules.
+    fn apply_scan(&mut self, scan: ScanResult) -> Task<Message> {
         let count = scan.apps.len();
 
         self.apps = scan.apps;
         self.warning = scan.warning;
+        self.indexing = false;
         self.error = if count == 0 {
             Some("No Start Menu applications were found.".to_owned())
         } else {
@@ -334,8 +317,16 @@ impl Launcher {
         self.recompute();
         self.selected = 0;
 
-        crate::util::log(format!("rescanned Start Menu ({count} apps)"));
+        crate::util::log(format!("indexed {count} apps"));
         self.load_icons()
+    }
+
+    /// Clears the query and any error, then rebuilds the result list.
+    fn reset_search(&mut self) {
+        self.query.clear();
+        self.error = None;
+        self.recompute();
+        self.selected = 0;
     }
 
     /// Loads the real application icons in the background.
@@ -351,8 +342,10 @@ impl Launcher {
     fn recompute(&mut self) {
         self.results = search::rank_with_usage(&self.apps, &self.query, &self.usage);
 
-        if self.selected >= self.results.len() {
-            self.selected = self.results.len().saturating_sub(1);
+        let visible = self.results.len().min(ui::MAX_RESULTS);
+
+        if self.selected >= visible {
+            self.selected = visible.saturating_sub(1);
         }
     }
 
@@ -416,9 +409,48 @@ fn focus_input() -> Task<Message> {
     operation::focus::<Message>(ui::INPUT_ID)
 }
 
+fn scan_task() -> Task<Message> {
+    Task::perform(async { platform::scan() }, Message::ScanComplete)
+}
+
 fn ensure_focus_later() -> Task<Message> {
     Task::future(async {
         tokio::time::sleep(Duration::from_millis(140)).await;
         Message::EnsureFocus
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn launcher_with_results(count: usize) -> Launcher {
+        Launcher {
+            apps: Vec::new(),
+            results: (0..count).collect(),
+            usage: Usage::default(),
+            icons: HashMap::new(),
+            query: String::new(),
+            selected: 0,
+            visible: true,
+            focused: false,
+            window_id: None,
+            hwnd: None,
+            hotkey: HotkeyStatus::Pending,
+            error: None,
+            warning: None,
+            indexing: false,
+        }
+    }
+
+    #[test]
+    fn navigation_stays_within_visible_rows() {
+        let mut launcher = launcher_with_results(20);
+
+        let _ = launcher.update(Message::Navigate(100));
+        assert_eq!(launcher.selected, ui::MAX_RESULTS - 1);
+
+        let _ = launcher.update(Message::Navigate(-100));
+        assert_eq!(launcher.selected, 0);
+    }
 }

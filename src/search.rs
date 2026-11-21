@@ -2,6 +2,7 @@
 
 use crate::platform::apps::AppEntry;
 use crate::usage::{Usage, UsageEntry};
+use crate::util::normalize_name as normalize;
 
 /// Returns application indices ordered from best to worst match, preferring
 /// apps that are launched often.
@@ -147,7 +148,7 @@ fn subsequence_score(name: &str, query: &str) -> Option<i32> {
     let gaps = span.saturating_sub(query_chars.len()) as i32;
     let boundary_bonus = positions
         .iter()
-        .filter(|position| is_word_boundary(name, **position))
+        .filter(|position| is_char_boundary(&name_chars, **position))
         .count() as i32
         * 35;
 
@@ -171,18 +172,10 @@ fn is_word_boundary(text: &str, byte_position: usize) -> bool {
         .is_none_or(|character| !character.is_alphanumeric())
 }
 
-fn normalize(value: &str) -> String {
-    let mut normalized = String::with_capacity(value.len());
-
-    for character in value.trim().chars() {
-        if character.is_alphanumeric() {
-            normalized.extend(character.to_lowercase());
-        } else if !normalized.ends_with(' ') {
-            normalized.push(' ');
-        }
-    }
-
-    normalized.trim().to_owned()
+/// Word-boundary check for a position in a char slice. Subsequence matches track
+/// char indices, which are not byte offsets once a name contains non-ASCII text.
+fn is_char_boundary(characters: &[char], index: usize) -> bool {
+    index == 0 || !characters[index - 1].is_alphanumeric()
 }
 
 #[cfg(test)]
@@ -261,6 +254,15 @@ mod tests {
     fn unrelated_query_returns_nothing() {
         let apps = vec![app("Notepad"), app("Calculator")];
         assert!(rank(&apps, "zzzz").is_empty());
+    }
+
+    #[test]
+    fn unicode_names_do_not_panic_in_subsequence_matching() {
+        let apps = vec![app("Über"), app("Café")];
+
+        // "br" only matches "Über" as a subsequence, which used to index the
+        // name by char position into a byte slice.
+        assert_eq!(rank(&apps, "br"), vec![0]);
     }
 
     fn usage_with(entries: &[(&str, u32, u64)]) -> Usage {

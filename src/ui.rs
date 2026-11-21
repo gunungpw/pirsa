@@ -14,7 +14,7 @@ pub const WINDOW_WIDTH: f32 = 820.0;
 pub const WINDOW_HEIGHT: f32 = 540.0;
 pub const INPUT_ID: &str = "pirsa-search-input";
 
-const MAX_RESULTS: usize = 8;
+pub const MAX_RESULTS: usize = 8;
 const ROW_HEIGHT: f32 = 46.0;
 const ROW_GAP: f32 = 2.0;
 
@@ -23,7 +23,6 @@ const BG_BOTTOM: Color = Color::from_rgb8(0x0a, 0x0c, 0x11);
 const TEXT: Color = Color::from_rgb8(0xf3, 0xf5, 0xf9);
 const MUTED: Color = Color::from_rgb8(0xb8, 0xbf, 0xcc);
 const DIM: Color = Color::from_rgb8(0x8a, 0x93, 0xa3);
-const ACCENT: Color = Color::from_rgb8(0x7a, 0xa2, 0xf7);
 const ACCENT_SOFT: Color = Color::from_rgba(0.478, 0.635, 0.968, 0.20);
 const SUCCESS: Color = Color::from_rgb8(0x73, 0xd8, 0xa3);
 const WARNING: Color = Color::from_rgb8(0xe0, 0xaf, 0x68);
@@ -71,15 +70,6 @@ pub fn view(app: &Launcher) -> Element<'_, Message> {
 }
 
 fn search_row(app: &Launcher) -> Element<'_, Message> {
-    let logo = container(text("P").size(14).font(bold_font()).color(Color::WHITE))
-        .width(30)
-        .height(30)
-        .align_x(Alignment::Center)
-        .align_y(Alignment::Center)
-        .style(logo_style);
-
-    let draggable_logo = mouse_area(logo).on_press(Message::DragWindow);
-
     let field = text_input("Search apps…", &app.query)
         .id(INPUT_ID)
         .on_input(Message::QueryChanged)
@@ -97,12 +87,11 @@ fn search_row(app: &Launcher) -> Element<'_, Message> {
             .width(24)
             .height(24)
             .padding(0)
-            .style(clear_button_style)
+            .style(ghost_button_style)
             .into()
     };
 
     row![
-        draggable_logo,
         field,
         clear,
         hotkey_keycap(app.hotkey),
@@ -147,13 +136,16 @@ fn section_label(app: &Launcher) -> Element<'_, Message> {
 
     details = details.push(text(count).size(9).font(MONO_FONT).color(DIM));
 
-    row![
-        text(title).size(13).font(medium_font()).color(MUTED),
-        details
-    ]
-    .width(Length::Fill)
-    .height(18)
-    .align_y(Alignment::Center)
+    mouse_area(
+        row![
+            text(title).size(13).font(medium_font()).color(MUTED),
+            details
+        ]
+        .width(Length::Fill)
+        .height(18)
+        .align_y(Alignment::Center),
+    )
+    .on_press(Message::DragWindow)
     .into()
 }
 
@@ -268,7 +260,7 @@ fn footer(app: &Launcher) -> Element<'_, Message> {
     let quit = button(text("Quit").size(10).font(UI_FONT))
         .on_press(Message::Quit)
         .padding([3, 7])
-        .style(quit_button_style);
+        .style(ghost_button_style);
 
     if let Some(error) = &app.error {
         return row![
@@ -424,16 +416,6 @@ fn root_style(_theme: &Theme) -> container::Style {
     }
 }
 
-fn logo_style(_theme: &Theme) -> container::Style {
-    container::Style {
-        background: Some(Background::Color(ACCENT)),
-        border: border::rounded(7)
-            .width(1)
-            .color(Color::from_rgba(1.0, 1.0, 1.0, 0.14)),
-        ..container::Style::default()
-    }
-}
-
 fn search_input_style(_theme: &Theme, _status: text_input::Status) -> text_input::Style {
     text_input::Style {
         background: Background::Color(Color::TRANSPARENT),
@@ -508,20 +490,7 @@ fn close_button_style(_theme: &Theme, status: button::Status) -> button::Style {
     }
 }
 
-fn clear_button_style(_theme: &Theme, status: button::Status) -> button::Style {
-    button::Style {
-        background: match status {
-            button::Status::Hovered | button::Status::Pressed => Some(Background::Color(HOVERED)),
-            _ => None,
-        },
-        text_color: MUTED,
-        border: border::rounded(5),
-        shadow: iced::Shadow::default(),
-        snap: true,
-    }
-}
-
-fn quit_button_style(_theme: &Theme, status: button::Status) -> button::Style {
+fn ghost_button_style(_theme: &Theme, status: button::Status) -> button::Style {
     button::Style {
         background: match status {
             button::Status::Hovered | button::Status::Pressed => Some(Background::Color(HOVERED)),

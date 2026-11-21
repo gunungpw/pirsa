@@ -5,7 +5,40 @@ All notable changes to Pirsa are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-11-21
+
+### Added
+
+- Clean-shutdown support: the app now creates a named quit event, and the
+  installer uses it to stop a running instance before replacing the binary.
+
+### Changed
+
+- `scripts/install.ps1` now detects a running Pirsa instance, asks it to quit
+  cleanly, waits for it to exit, and force-stops it only as a fallback before
+  installing the new build. The release build runs first, so a failed build no
+  longer leaves the previously installed launcher stopped. Installing without
+  `-Startup` now removes a stale startup shortcut, and the script verifies that
+  the newly launched instance stays alive.
+- Single-instance event handling was generalized so the show and quit events
+  share one watcher, and installer/process handling was made more defensive.
+- Wake-up signalling between the hotkey thread and the iced subscription uses
+  `tokio::sync::Notify` instead of a broadcast channel.
+- Start Menu normalization is now shared by indexing and search instead of
+  being duplicated, and startup/F5 scan handling uses one code path.
+- The F5 rescan runs on the task executor instead of blocking the UI thread.
+- Duplicate clear/quit button styles were consolidated into one ghost style.
+- Removed the "P" logo from the search row so the field uses the full width.
+  The app-list heading is now the drag handle for moving the window.
+
+### Fixed
+
+- Subsequence search no longer panics on app names containing non-ASCII
+  characters such as `Über`.
+- Keyboard selection is limited to the eight rows that are actually visible.
+
 ## [0.3.0] - 2026-11-20
+
 
 ### Changed
 
