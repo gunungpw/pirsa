@@ -6,8 +6,6 @@ A fast, keyboard-first launcher for Windows, built with **Rust** and **iced**.
 
 Repository: [github.com/gunungpw/pirsa](https://github.com/gunungpw/pirsa)
 
-![Pirsa](docs/screenshot.png)
-
 Press **Alt+Space** anywhere to open it, type a few letters, press **Enter**.
 Pirsa searches the Start Menu (including Store/UWP apps) and gets out of the way.
 
