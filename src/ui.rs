@@ -7,6 +7,7 @@ use iced::widget::{Image, Space, button, column, container, mouse_area, row, tex
 use iced::{Alignment, Background, Border, Color, Element, Font, Length, Theme};
 
 use crate::app::{Launcher, Message};
+use crate::calc::{CalcKind, CalcResult};
 use crate::platform::HotkeyStatus;
 use crate::platform::apps::{AppEntry, LaunchTarget};
 
@@ -15,14 +16,17 @@ pub const WINDOW_HEIGHT: f32 = 540.0;
 pub const INPUT_ID: &str = "pirsa-search-input";
 
 pub const MAX_RESULTS: usize = 8;
+pub const MAX_RESULTS_WITH_CALC: usize = MAX_RESULTS - 1;
 const ROW_HEIGHT: f32 = 46.0;
 const ROW_GAP: f32 = 2.0;
+const CALC_GAP: f32 = 8.0;
 
 const BG_TOP: Color = Color::from_rgb8(0x15, 0x18, 0x20);
 const BG_BOTTOM: Color = Color::from_rgb8(0x0a, 0x0c, 0x11);
 const TEXT: Color = Color::from_rgb8(0xf3, 0xf5, 0xf9);
 const MUTED: Color = Color::from_rgb8(0xb8, 0xbf, 0xcc);
 const DIM: Color = Color::from_rgb8(0x8a, 0x93, 0xa3);
+const ACCENT: Color = Color::from_rgb8(0x7a, 0xa2, 0xf7);
 const ACCENT_SOFT: Color = Color::from_rgba(0.478, 0.635, 0.968, 0.20);
 const SUCCESS: Color = Color::from_rgb8(0x73, 0xd8, 0xa3);
 const WARNING: Color = Color::from_rgb8(0xe0, 0xaf, 0x68);
@@ -49,17 +53,21 @@ const ICON_COLORS: [Color; 8] = [
 ];
 
 pub fn view(app: &Launcher) -> Element<'_, Message> {
-    let content = column![
-        search_row(app),
-        Space::new().height(14),
-        section_label(app),
-        Space::new().height(6),
-        result_list(app),
-        Space::new().height(Length::Fill),
-        footer(app),
-    ]
-    .width(Length::Fill)
-    .height(Length::Fill);
+    let mut content = column![search_row(app), Space::new().height(12)];
+
+    if let Some(calc) = &app.calc {
+        content = content.push(calc_card(app, calc));
+        content = content.push(Space::new().height(CALC_GAP));
+    }
+
+    content = content
+        .push(section_label(app))
+        .push(Space::new().height(6))
+        .push(result_list(app))
+        .push(Space::new().height(Length::Fill))
+        .push(footer(app))
+        .width(Length::Fill)
+        .height(Length::Fill);
 
     container(content)
         .width(Length::Fill)
@@ -70,7 +78,7 @@ pub fn view(app: &Launcher) -> Element<'_, Message> {
 }
 
 fn search_row(app: &Launcher) -> Element<'_, Message> {
-    let field = text_input("Search apps…", &app.query)
+    let field = text_input("Search apps, calculate, convert…", &app.query)
         .id(INPUT_ID)
         .on_input(Message::QueryChanged)
         .padding([0, 0])
@@ -107,6 +115,63 @@ fn search_row(app: &Launcher) -> Element<'_, Message> {
     .spacing(12)
     .align_y(Alignment::Center)
     .into()
+}
+
+fn calc_card<'a>(app: &'a Launcher, calc: &'a CalcResult) -> Element<'a, Message> {
+    let glyph = match calc.kind {
+        CalcKind::Math => "=",
+        CalcKind::Unit => "↔",
+    };
+
+    let badge = container(text(glyph).size(16).font(bold_font()).color(Color::WHITE))
+        .width(30)
+        .height(30)
+        .align_x(Alignment::Center)
+        .align_y(Alignment::Center)
+        .style(calc_badge_style);
+
+    let mut labels = column![
+        text(calc.expression.as_str())
+            .size(13)
+            .font(medium_font())
+            .color(TEXT)
+            .wrapping(Wrapping::None)
+    ]
+    .spacing(2);
+
+    if !calc.detail.is_empty() {
+        labels = labels.push(
+            text(calc.detail.as_str())
+                .size(9.5)
+                .font(UI_FONT)
+                .color(DIM)
+                .wrapping(Wrapping::None),
+        );
+    }
+
+    let content = row![
+        badge,
+        labels.width(Length::Fill),
+        text(calc.primary.as_str())
+            .size(17)
+            .font(semibold_font())
+            .color(ACCENT)
+            .wrapping(Wrapping::None),
+    ]
+    .width(Length::Fill)
+    .height(Length::Fill)
+    .align_y(Alignment::Center)
+    .spacing(12);
+
+    let selected = app.selected == 0;
+
+    button(content)
+        .on_press(Message::CopyCalc)
+        .width(Length::Fill)
+        .height(ROW_HEIGHT)
+        .padding([0, 12])
+        .style(move |theme, status| result_button_style(theme, status, selected))
+        .into()
 }
 
 fn section_label(app: &Launcher) -> Element<'_, Message> {
@@ -150,15 +215,20 @@ fn section_label(app: &Launcher) -> Element<'_, Message> {
 }
 
 fn result_list(app: &Launcher) -> Element<'_, Message> {
-    let height = MAX_RESULTS as f32 * ROW_HEIGHT + (MAX_RESULTS.saturating_sub(1)) as f32 * ROW_GAP;
+    let limit = app.result_limit();
+    let height = limit as f32 * ROW_HEIGHT + (limit.saturating_sub(1)) as f32 * ROW_GAP;
 
     let content: Element<'_, Message> = if app.results.is_empty() {
-        empty_state(app)
+        if app.calc.is_some() {
+            Space::new().into()
+        } else {
+            empty_state(app)
+        }
     } else {
         let rows: Vec<Element<'_, Message>> = app
             .results
             .iter()
-            .take(MAX_RESULTS)
+            .take(limit)
             .enumerate()
             .map(|(position, index)| result_row(app, *index, position))
             .collect();
@@ -178,7 +248,7 @@ fn result_row(app: &Launcher, app_index: usize, position: usize) -> Element<'_, 
         return Space::new().into();
     };
 
-    let selected = position == app.selected;
+    let selected = position + usize::from(app.calc.is_some()) == app.selected;
 
     // `button` places its content at the top-left, so the row has to claim the
     // full height and center its items itself. Otherwise the selected
@@ -281,11 +351,17 @@ fn footer(app: &Launcher) -> Element<'_, Message> {
         HotkeyStatus::Pending => (DIM, "Starting…"),
     };
 
+    let primary_action = if app.calc.is_some() && app.selected == 0 {
+        "Copy"
+    } else {
+        "Open"
+    };
+
     row![
         status_dot(color),
         text(label).size(10).font(UI_FONT).color(MUTED),
         Space::new().width(Length::Fill),
-        text("Open").size(10.5).font(UI_FONT).color(DIM),
+        text(primary_action).size(10.5).font(UI_FONT).color(DIM),
         keycap("↵"),
         Space::new().width(10),
         text("Hide").size(10.5).font(UI_FONT).color(DIM),
@@ -411,6 +487,16 @@ fn root_style(_theme: &Theme) -> container::Style {
         border: border::rounded(4)
             .width(1)
             .color(Color::from_rgba8(255, 255, 255, 0.08)),
+        ..container::Style::default()
+    }
+}
+
+fn calc_badge_style(_theme: &Theme) -> container::Style {
+    container::Style {
+        background: Some(Background::Color(ACCENT)),
+        border: border::rounded(7)
+            .width(1)
+            .color(Color::from_rgba(1.0, 1.0, 1.0, 0.14)),
         ..container::Style::default()
     }
 }

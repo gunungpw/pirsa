@@ -5,14 +5,24 @@ All notable changes to Pirsa are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.0] - 2026-11-25
+
+### Added
+
+- Calculator that evaluates arithmetic written in the search field, including
+  parentheses, powers, and common functions such as `sqrt`, `sin`, and `log`.
+- Length-unit conversion for `mm`, `cm`, `m`, `km`, `in`, `ft`, `yd`, and `mi`,
+  with aliases such as `inch`, `feet`, and `metres`. Typing `1 inch` shows a
+  primary conversion plus several equivalents; `1 inch to cm` targets one unit.
+- The calculation card is selected first. Enter or a click copies the result
+  (unit results copy all shown conversions) and hides the launcher.
 
 ### Changed
 
-- Start Menu enumeration and icon extraction now run on one dedicated,
-  long-lived shell thread that initializes COM as an STA. This keeps blocking
-  shell work off executor threads and gives every shell call a consistent
-  apartment.
+- Start Menu enumeration and icon extraction now run on dedicated, long-lived
+  shell workers that initialize COM as an STA. This keeps blocking shell work
+  off executor threads, gives every shell call a consistent apartment, and lets
+  scans proceed while an icon batch is still running.
 - Search metadata is precomputed when apps are indexed: normalized names,
   character vectors, acronyms, and character lengths are stored in each
   `AppEntry`. Rankings no longer normalize every app on every keystroke or
@@ -21,13 +31,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lowercase string for every comparison.
 - Usage ranking now uses one history lookup per matched app instead of two.
 - Requested icon size is 64 px so icons stay crisp on higher-DPI displays.
+- The search hint now mentions calculation and conversion, and seven app rows
+  are shown while the calculation card is visible.
 
 ### Fixed
 
 - Scan and icon jobs carry generation tokens. If an older scan or icon batch
   finishes late, it can no longer overwrite newer results.
 - F5 is ignored while a scan is already running, preventing duplicate queued
-  scans on the shell worker.
+  scans on the shell workers.
 - `AppEntry` names and details are read-only with precomputed search text, so
   they cannot drift out of sync with the ranker.
 - A failed shell worker now returns a visible indexing warning instead of

@@ -4,6 +4,7 @@
 compile_error!("Pirsa only supports Windows.");
 
 mod app;
+mod calc;
 mod platform;
 mod search;
 mod ui;

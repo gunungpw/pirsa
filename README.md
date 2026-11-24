@@ -23,6 +23,11 @@ Pirsa searches the Start Menu (including Store/UWP apps) and gets out of the way
 - **Frequently used first** — apps you launch most often rise to the top of the
   list and win close search ties. The history is saved to
   `%LOCALAPPDATA%\Pirsa\usage.txt`.
+- **Calculator** — type `2 * (3 + 4)` or `sqrt(16)` and the answer appears above
+  the app list. Press Enter to copy it.
+- **Unit conversion** — type `1 inch` to see it converted to millimetres,
+  centimetres, metres, feet, yards, miles and kilometres, or use
+  `1 inch to cm` for a single target.
 - **Real application icons** — every row shows the app's actual Windows icon,
   read from the shell for both Start Menu shortcuts and Store apps, with a
   colored initial tile only as a fallback.
@@ -99,13 +104,29 @@ The app has no tray icon. To quit, open Pirsa and click **Quit** in the footer
 | Key / action | Result |
 | --- | --- |
 | `Alt+Space` | Open or hide the launcher |
-| `↑` / `↓` | Move the selection |
-| `Enter` | Launch the selected app |
+| `↑` / `↓` | Move the selection (the calculation card comes first) |
+| `Enter` | Copy the selected calculation, or launch the selected app |
 | `Esc` | Hide the launcher |
 | `Ctrl+Q` | Quit Pirsa |
 | `F5` | Rescan the Start Menu |
-| Click a row | Launch that app |
+| Click a row | Launch that app or copy that calculation |
 | Drag the app-list heading | Move the window |
+
+## Calculator and unit conversion
+
+Type an expression and the result card appears above the app results:
+
+- Math: `2 + 2`, `2 * (3 + 4)`, `2^10`, `sqrt(16)`, `sin(pi)`.
+  Supported operators are `+ - * / ^` and parentheses. Functions are `sqrt`,
+  `abs`, `round`, `floor`, `ceil`, `sin`, `cos`, `tan`, `ln`, and `log`.
+- Length units: `mm`, `cm`, `m`, `km`, `in`, `ft`, `yd`, `mi`, including
+  aliases such as `inch`, `inches`, `feet`, `meter`, `metres`, `yard`, and
+  `mile`.
+- `1 inch` shows a primary conversion plus several equivalents.
+- `1 inch to cm` or `1 inch -> cm` converts to one target unit.
+
+The calculation card is selected first; pressing Enter copies its result.
+Press ↓ to select the first app row instead.
 
 ## How indexing works
 
@@ -139,6 +160,7 @@ active window's system menu.
 src/
   main.rs              iced application bootstrap and window settings
   app.rs               launcher state, messages, keyboard handling
+  calc.rs              safe expression parser and length-unit conversion
   ui.rs                layout, colors, custom widget styles
   search.rs            fuzzy ranking with unit tests
   usage.rs             persistent launch history for the "frequently used first" order

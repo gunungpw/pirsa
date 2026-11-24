@@ -10,6 +10,7 @@ use iced::widget::image::Handle;
 use iced::widget::operation;
 use iced::{Element, Event, Subscription, Task, window};
 
+use crate::calc::{self, CalcResult};
 use crate::platform::{self, AppEntry, HotkeyStatus, ScanResult};
 use crate::search;
 use crate::ui;
@@ -19,6 +20,8 @@ use crate::usage::Usage;
 pub struct Launcher {
     pub(crate) apps: Vec<AppEntry>,
     pub(crate) results: Vec<usize>,
+    /// Optional calculator/unit-conversion result for the current query.
+    pub(crate) calc: Option<CalcResult>,
     /// Launch history: how often each app was opened, used for ordering.
     pub(crate) usage: Usage,
     /// Real application icons, keyed by display name.
@@ -45,6 +48,7 @@ pub enum Message {
     ClearQuery,
     Navigate(i32),
     Activate(usize),
+    CopyCalc,
     Hide,
     Quit,
     DragWindow,
@@ -67,6 +71,7 @@ impl Launcher {
         let mut launcher = Self {
             apps: Vec::new(),
             results: Vec::new(),
+            calc: None,
             usage: Usage::load(),
             icons: HashMap::new(),
             query: String::new(),
@@ -104,6 +109,7 @@ impl Launcher {
         match message {
             Message::QueryChanged(query) => {
                 self.query = query;
+                self.calc = calc::evaluate(&self.query);
                 self.error = None;
                 self.recompute();
                 self.selected = 0;
@@ -111,14 +117,17 @@ impl Launcher {
             }
             Message::ClearQuery => {
                 self.query.clear();
+                self.calc = None;
                 self.error = None;
                 self.recompute();
                 self.selected = 0;
                 Task::none()
             }
             Message::Navigate(delta) => {
-                if !self.results.is_empty() {
-                    let last = self.results.len().min(ui::MAX_RESULTS) - 1;
+                let total = self.selectable_count();
+
+                if total > 0 {
+                    let last = total - 1;
                     self.selected = if delta < 0 {
                         self.selected.saturating_sub(delta.unsigned_abs() as usize)
                     } else {
@@ -129,6 +138,7 @@ impl Launcher {
                 Task::none()
             }
             Message::Activate(index) => self.activate(index),
+            Message::CopyCalc => self.copy_calc(),
             Message::Hide => self.hide(),
             Message::Quit => iced::exit(),
             Message::DragWindow => self
@@ -315,6 +325,29 @@ impl Launcher {
         }
     }
 
+    fn activate_selected(&mut self) -> Task<Message> {
+        if self.calc.is_some() {
+            if self.selected == 0 {
+                return self.copy_calc();
+            }
+
+            self.activate(self.selected - 1)
+        } else {
+            self.activate(self.selected)
+        }
+    }
+
+    fn copy_calc(&mut self) -> Task<Message> {
+        let Some(calc) = &self.calc else {
+            return Task::none();
+        };
+
+        let text = calc.copy_text.clone();
+        crate::util::log("copied calculation result");
+
+        Task::batch([iced::clipboard::write::<Message>(text), self.hide()])
+    }
+
     /// Starts an asynchronous scan and tags it with a new generation.
     fn begin_scan(&mut self) -> Task<Message> {
         self.scan_generation = self.scan_generation.wrapping_add(1);
@@ -368,6 +401,7 @@ impl Launcher {
     /// Clears the query and any error, then rebuilds the result list.
     fn reset_search(&mut self) {
         self.query.clear();
+        self.calc = None;
         self.error = None;
         self.recompute();
         self.selected = 0;
@@ -387,11 +421,25 @@ impl Launcher {
     fn recompute(&mut self) {
         self.results = search::rank_with_usage(&self.apps, &self.query, &self.usage);
 
-        let visible = self.results.len().min(ui::MAX_RESULTS);
+        let selectable = self.selectable_count();
 
-        if self.selected >= visible {
-            self.selected = visible.saturating_sub(1);
+        if self.selected >= selectable {
+            self.selected = selectable.saturating_sub(1);
         }
+    }
+
+    /// Number of app rows that fit while a calculation card is visible.
+    pub(crate) fn result_limit(&self) -> usize {
+        if self.calc.is_some() {
+            ui::MAX_RESULTS_WITH_CALC
+        } else {
+            ui::MAX_RESULTS
+        }
+    }
+
+    /// Calculation card first, then the visible app rows.
+    fn selectable_count(&self) -> usize {
+        self.results.len().min(self.result_limit()) + usize::from(self.calc.is_some())
     }
 
     fn handle_event(&mut self, event: Event) -> Task<Message> {
@@ -443,7 +491,7 @@ impl Launcher {
             Key::Named(Named::Escape) => self.hide(),
             Key::Named(Named::ArrowUp) => self.update(Message::Navigate(-1)),
             Key::Named(Named::ArrowDown) => self.update(Message::Navigate(1)),
-            Key::Named(Named::Enter) => self.activate(self.selected),
+            Key::Named(Named::Enter) => self.activate_selected(),
             Key::Named(Named::F5) => self.rescan(),
             _ => Task::none(),
         }
@@ -469,6 +517,7 @@ mod tests {
         Launcher {
             apps: Vec::new(),
             results: (0..count).collect(),
+            calc: None,
             usage: Usage::default(),
             icons: HashMap::new(),
             query: String::new(),
@@ -524,5 +573,26 @@ mod tests {
         let _ = launcher.rescan();
 
         assert_eq!(launcher.scan_generation, 1);
+    }
+
+    #[test]
+    fn calculation_card_is_the_first_selection() {
+        let mut launcher = launcher_with_results(10);
+        launcher.calc = Some(CalcResult {
+            kind: crate::calc::CalcKind::Math,
+            expression: "2 + 2".to_owned(),
+            primary: "4".to_owned(),
+            detail: String::new(),
+            copy_text: "4".to_owned(),
+        });
+
+        assert_eq!(launcher.result_limit(), ui::MAX_RESULTS_WITH_CALC);
+        assert_eq!(launcher.selectable_count(), ui::MAX_RESULTS_WITH_CALC + 1);
+
+        let _ = launcher.update(Message::Navigate(100));
+        assert_eq!(launcher.selected, ui::MAX_RESULTS_WITH_CALC);
+
+        let _ = launcher.update(Message::Navigate(-100));
+        assert_eq!(launcher.selected, 0);
     }
 }
