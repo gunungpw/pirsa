@@ -21,17 +21,10 @@ if ($start -lt 0 -or $end -le 0) {
     throw 'Could not find the icon group in the source SVG.'
 }
 
-$inner = $source.Substring($start, $end - $start).Replace('currentColor', '#FFFFFF')
+$inner = $source.Substring($start, $end - $start).Replace('currentColor', '#5EEAD4')
 $wrapper = @"
 <svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
-  <defs>
-    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#8AB4FF"/>
-      <stop offset="1" stop-color="#5B7FE0"/>
-    </linearGradient>
-  </defs>
-  <rect x="24" y="24" width="976" height="976" rx="224" fill="url(#bg)"/>
-  <g transform="translate(256 256) scale(21.333333)">
+  <g transform="translate(20 20) scale(42)">
 $inner
   </g>
 </svg>

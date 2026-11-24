@@ -7,6 +7,7 @@ mod hotkey;
 mod icons;
 mod instance;
 mod shell;
+mod tray;
 pub mod window;
 
 use std::sync::OnceLock;
@@ -44,6 +45,7 @@ pub fn init() -> HotkeyStatus {
     }
 
     shell::start();
+    tray::start();
 
     let (show, quit) = instance::create_events();
     instance::watch(show, "show", request_show);

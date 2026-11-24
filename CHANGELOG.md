@@ -5,6 +5,19 @@ All notable changes to Pirsa are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Notification-area tray icon. Left-click opens Pirsa; right-click offers
+  **Open** and **Quit**. The icon is re-added automatically when Explorer
+  restarts.
+
+### Changed
+
+- The app and tray icon now use the transparent, larger **Teal Light**
+  (`#5EEAD4`) window glyph instead of the blue rounded-square icon.
+
 ## [0.5.0] - 2026-11-25
 
 ### Added

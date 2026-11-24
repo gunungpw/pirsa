@@ -34,6 +34,8 @@ Pirsa searches the Start Menu (including Store/UWP apps) and gets out of the way
 - **Keyboard-first** — arrow keys to move, Enter to launch, Esc to hide.
 - **One instance** — launching `pirsa.exe` again reveals the running launcher
   instead of starting a second copy.
+- **Tray icon** — left-click it to open Pirsa; right-click for **Open** and
+  **Quit**. The icon is restored automatically if Explorer restarts.
 - **Focus-aware** — hiding returns focus to the window you came from; clicking
   elsewhere auto-hides the launcher.
 - **Native and small** — one executable, no WebView, no runtime dependencies.
@@ -96,8 +98,9 @@ exit, and only falls back to force-stopping it if it does not respond. The build
 happens before the running copy is touched, so a failed build leaves the
 existing installation running.
 
-The app has no tray icon. To quit, open Pirsa and click **Quit** in the footer
-(or press **Ctrl+Q** while it is focused).
+The app lives in the notification area. Left-click the tray icon to open Pirsa,
+or right-click it for **Open** and **Quit**. You can also quit from the launcher
+footer or with **Ctrl+Q** while it is focused.
 
 ## Controls
 
@@ -111,6 +114,8 @@ The app has no tray icon. To quit, open Pirsa and click **Quit** in the footer
 | `F5` | Rescan the Start Menu |
 | Click a row | Launch that app or copy that calculation |
 | Drag the app-list heading | Move the window |
+| Tray icon left-click | Open Pirsa |
+| Tray icon right-click | Open or quit Pirsa |
 
 ## Calculator and unit conversion
 
@@ -171,6 +176,7 @@ src/
     hotkey.rs          Alt+Space via RegisterHotKey
     instance.rs        named mutex + named show/quit events
     shell.rs           dedicated shell worker for scans and icons
+    tray.rs            notification-area icon and menu
     apps.rs            Start Menu and AppsFolder scanning, ShellExecute
     icons.rs           real app icon extraction via IShellItemImageFactory
     window.rs          show/hide, centering, foreground handling
