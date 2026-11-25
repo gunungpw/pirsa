@@ -1,6 +1,6 @@
 //! Ranking for the launcher's search field.
 
-use crate::platform::apps::AppEntry;
+use crate::model::AppEntry;
 use crate::usage::{Usage, UsageEntry};
 use crate::util::SearchText;
 
@@ -181,7 +181,7 @@ fn is_char_boundary(characters: &[char], index: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::platform::apps::LaunchTarget;
+    use crate::model::LaunchTarget;
 
     fn app(name: &str) -> AppEntry {
         AppEntry::new(

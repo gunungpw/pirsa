@@ -21,8 +21,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{PCWSTR, w};
 
-use crate::platform::{request_quit, request_show};
-use crate::util::log;
+use pirsa_core::util::log;
+
+use crate::{request_quit, request_show};
 
 const TRAY_ID: u32 = 1;
 const CALLBACK_MESSAGE: u32 = WM_APP + 1;

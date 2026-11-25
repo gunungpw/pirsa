@@ -13,7 +13,7 @@ use windows::Win32::System::Threading::{
 };
 use windows::core::{PCWSTR, w};
 
-use crate::util::log;
+use pirsa_core::util::log;
 
 /// Returns `true` when this process owns the single-instance mutex.
 pub fn claim() -> bool {

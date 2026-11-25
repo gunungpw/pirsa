@@ -24,7 +24,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SetForegroundWindow, SetWindowPos, ShowWindow, SwitchToThisWindow,
 };
 
-use crate::util::log;
+use pirsa_core::util::log;
 
 static PREVIOUS_FOREGROUND: AtomicIsize = AtomicIsize::new(0);
 

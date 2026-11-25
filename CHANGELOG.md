@@ -5,7 +5,7 @@ All notable changes to Pirsa are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.0] - 2026-11-26
 
 ### Added
 
@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The app and tray icon now use the transparent, larger **Teal Light**
   (`#5EEAD4`) window glyph instead of the blue rounded-square icon.
+- Split the project into a Cargo workspace: `pirsa-core` holds shared models
+  and platform-independent logic, `pirsa-platform` owns all Windows/COM/FFI
+  integration, and `pirsa-ui` owns the iced view layer. The root `pirsa` binary
+  wires them together.
+- The UI now consumes a `ViewModel` trait instead of depending on the
+  application state type, keeping the UI crate free of platform code.
 
 ## [0.5.0] - 2026-11-25
 

@@ -1,0 +1,21 @@
+[package]
+name = "pirsa-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "iced user interface for Pirsa"
+
+[lib]
+name = "pirsa_ui"
+path = "src/lib.rs"
+
+[dependencies]
+pirsa-core = { path = "../core" }
+iced = { version = "0.14", default-features = false, features = [
+    "wgpu",
+    "web-colors",
+    "tokio",
+    "crisp",
+    "image-without-codecs",
+] }

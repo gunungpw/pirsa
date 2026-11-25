@@ -10,11 +10,13 @@ use iced::widget::image::Handle;
 use iced::widget::operation;
 use iced::{Element, Event, Subscription, Task, window};
 
-use crate::calc::{self, CalcResult};
-use crate::platform::{self, AppEntry, HotkeyStatus, ScanResult};
-use crate::search;
-use crate::ui;
-use crate::usage::Usage;
+use pirsa_core::calc::{self, CalcResult};
+use pirsa_core::search;
+use pirsa_core::usage::Usage;
+use pirsa_core::util;
+use pirsa_core::{AppEntry, HotkeyStatus, Icon, ScanResult};
+use pirsa_platform as platform;
+use pirsa_ui as ui;
 
 /// The application's complete state.
 pub struct Launcher {
@@ -44,14 +46,7 @@ pub struct Launcher {
 
 #[derive(Debug, Clone)]
 pub enum Message {
-    QueryChanged(String),
-    ClearQuery,
-    Navigate(i32),
-    Activate(usize),
-    CopyCalc,
-    Hide,
-    Quit,
-    DragWindow,
+    Ui(ui::Message),
     Platform,
     EnsureFocus,
     WindowReady(window::Id, isize),
@@ -61,7 +56,7 @@ pub enum Message {
     },
     IconsLoaded {
         generation: u64,
-        icons: Vec<(String, platform::Icon)>,
+        icons: Vec<(String, Icon)>,
     },
     Event(Event),
 }
@@ -107,44 +102,7 @@ impl Launcher {
 
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
-            Message::QueryChanged(query) => {
-                self.query = query;
-                self.calc = calc::evaluate(&self.query);
-                self.error = None;
-                self.recompute();
-                self.selected = 0;
-                Task::none()
-            }
-            Message::ClearQuery => {
-                self.query.clear();
-                self.calc = None;
-                self.error = None;
-                self.recompute();
-                self.selected = 0;
-                Task::none()
-            }
-            Message::Navigate(delta) => {
-                let total = self.selectable_count();
-
-                if total > 0 {
-                    let last = total - 1;
-                    self.selected = if delta < 0 {
-                        self.selected.saturating_sub(delta.unsigned_abs() as usize)
-                    } else {
-                        self.selected.saturating_add(delta as usize).min(last)
-                    };
-                }
-
-                Task::none()
-            }
-            Message::Activate(index) => self.activate(index),
-            Message::CopyCalc => self.copy_calc(),
-            Message::Hide => self.hide(),
-            Message::Quit => iced::exit(),
-            Message::DragWindow => self
-                .window_id
-                .map(window::drag::<Message>)
-                .unwrap_or_else(Task::none),
+            Message::Ui(message) => self.update_ui(message),
             Message::Platform => self.tick(),
             Message::EnsureFocus => self.ensure_focus(),
             Message::ScanComplete { generation, scan } => self.apply_scan(generation, scan),
@@ -163,7 +121,7 @@ impl Launcher {
             Message::WindowReady(id, hwnd) => {
                 self.window_id = Some(id);
                 self.hwnd = Some(hwnd);
-                crate::util::log(format!("window ready (hwnd={hwnd:#x})"));
+                util::log(format!("window ready (hwnd={hwnd:#x})"));
 
                 if self.visible {
                     if !platform::window::is_visible(hwnd) {
@@ -184,8 +142,51 @@ impl Launcher {
         }
     }
 
+    fn update_ui(&mut self, message: ui::Message) -> Task<Message> {
+        match message {
+            ui::Message::QueryChanged(query) => {
+                self.query = query;
+                self.calc = calc::evaluate(&self.query);
+                self.error = None;
+                self.recompute();
+                self.selected = 0;
+                Task::none()
+            }
+            ui::Message::ClearQuery => {
+                self.query.clear();
+                self.calc = None;
+                self.error = None;
+                self.recompute();
+                self.selected = 0;
+                Task::none()
+            }
+            ui::Message::Navigate(delta) => {
+                let total = self.selectable_count();
+
+                if total > 0 {
+                    let last = total - 1;
+                    self.selected = if delta < 0 {
+                        self.selected.saturating_sub(delta.unsigned_abs() as usize)
+                    } else {
+                        self.selected.saturating_add(delta as usize).min(last)
+                    };
+                }
+
+                Task::none()
+            }
+            ui::Message::Activate(index) => self.activate(index),
+            ui::Message::CopyCalc => self.copy_calc(),
+            ui::Message::Hide => self.hide(),
+            ui::Message::Quit => iced::exit(),
+            ui::Message::DragWindow => self
+                .window_id
+                .map(window::drag::<Message>)
+                .unwrap_or_else(Task::none),
+        }
+    }
+
     pub fn view(&self) -> Element<'_, Message> {
-        ui::view(self)
+        ui::view(self).map(Message::Ui)
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
@@ -239,7 +240,7 @@ impl Launcher {
             .map(platform::window::is_foreground)
             .unwrap_or(false);
 
-        crate::util::log(format!(
+        util::log(format!(
             "toggle requested (visible={actually_visible}, foreground={foreground})"
         ));
 
@@ -319,7 +320,7 @@ impl Launcher {
             }
             Err(error) => {
                 self.error = Some(format!("Could not launch {name}: {error}"));
-                crate::util::log(format!("launch failed for {name}: {error}"));
+                util::log(format!("launch failed for {name}: {error}"));
                 Task::none()
             }
         }
@@ -343,7 +344,7 @@ impl Launcher {
         };
 
         let text = calc.copy_text.clone();
-        crate::util::log("copied calculation result");
+        util::log("copied calculation result");
 
         Task::batch([iced::clipboard::write::<Message>(text), self.hide()])
     }
@@ -374,10 +375,13 @@ impl Launcher {
     /// the startup scan and F5 so both follow the same rules.
     fn apply_scan(&mut self, generation: u64, scan: ScanResult) -> Task<Message> {
         if generation != self.scan_generation {
-            crate::util::log(format!(
-                "ignoring stale scan {generation} (current {})",
-                self.scan_generation
-            ));
+            if !cfg!(test) {
+                util::log(format!(
+                    "ignoring stale scan {generation} (current {})",
+                    self.scan_generation
+                ));
+            }
+
             return Task::none();
         }
 
@@ -394,7 +398,7 @@ impl Launcher {
         self.recompute();
         self.selected = 0;
 
-        crate::util::log(format!("indexed {count} apps"));
+        util::log(format!("indexed {count} apps"));
         self.load_icons()
     }
 
@@ -481,20 +485,66 @@ impl Launcher {
 
         if repeat {
             return match key {
-                Key::Named(Named::ArrowUp) => self.update(Message::Navigate(-1)),
-                Key::Named(Named::ArrowDown) => self.update(Message::Navigate(1)),
+                Key::Named(Named::ArrowUp) => self.update(Message::Ui(ui::Message::Navigate(-1))),
+                Key::Named(Named::ArrowDown) => self.update(Message::Ui(ui::Message::Navigate(1))),
                 _ => Task::none(),
             };
         }
 
         match key {
             Key::Named(Named::Escape) => self.hide(),
-            Key::Named(Named::ArrowUp) => self.update(Message::Navigate(-1)),
-            Key::Named(Named::ArrowDown) => self.update(Message::Navigate(1)),
+            Key::Named(Named::ArrowUp) => self.update(Message::Ui(ui::Message::Navigate(-1))),
+            Key::Named(Named::ArrowDown) => self.update(Message::Ui(ui::Message::Navigate(1))),
             Key::Named(Named::Enter) => self.activate_selected(),
             Key::Named(Named::F5) => self.rescan(),
             _ => Task::none(),
         }
+    }
+}
+
+impl ui::ViewModel for Launcher {
+    fn apps(&self) -> &[AppEntry] {
+        &self.apps
+    }
+
+    fn results(&self) -> &[usize] {
+        &self.results
+    }
+
+    fn calc(&self) -> Option<&CalcResult> {
+        self.calc.as_ref()
+    }
+
+    fn icons(&self) -> &HashMap<String, Handle> {
+        &self.icons
+    }
+
+    fn query(&self) -> &str {
+        &self.query
+    }
+
+    fn selected(&self) -> usize {
+        self.selected
+    }
+
+    fn hotkey(&self) -> HotkeyStatus {
+        self.hotkey
+    }
+
+    fn error(&self) -> Option<&str> {
+        self.error.as_deref()
+    }
+
+    fn warning(&self) -> Option<&str> {
+        self.warning.as_deref()
+    }
+
+    fn indexing(&self) -> bool {
+        self.indexing
+    }
+
+    fn result_limit(&self) -> usize {
+        Launcher::result_limit(self)
     }
 }
 
@@ -539,10 +589,10 @@ mod tests {
     fn navigation_stays_within_visible_rows() {
         let mut launcher = launcher_with_results(20);
 
-        let _ = launcher.update(Message::Navigate(100));
+        let _ = launcher.update(Message::Ui(ui::Message::Navigate(100)));
         assert_eq!(launcher.selected, ui::MAX_RESULTS - 1);
 
-        let _ = launcher.update(Message::Navigate(-100));
+        let _ = launcher.update(Message::Ui(ui::Message::Navigate(-100)));
         assert_eq!(launcher.selected, 0);
     }
 
@@ -579,7 +629,7 @@ mod tests {
     fn calculation_card_is_the_first_selection() {
         let mut launcher = launcher_with_results(10);
         launcher.calc = Some(CalcResult {
-            kind: crate::calc::CalcKind::Math,
+            kind: calc::CalcKind::Math,
             expression: "2 + 2".to_owned(),
             primary: "4".to_owned(),
             detail: String::new(),
@@ -589,10 +639,10 @@ mod tests {
         assert_eq!(launcher.result_limit(), ui::MAX_RESULTS_WITH_CALC);
         assert_eq!(launcher.selectable_count(), ui::MAX_RESULTS_WITH_CALC + 1);
 
-        let _ = launcher.update(Message::Navigate(100));
+        let _ = launcher.update(Message::Ui(ui::Message::Navigate(100)));
         assert_eq!(launcher.selected, ui::MAX_RESULTS_WITH_CALC);
 
-        let _ = launcher.update(Message::Navigate(-100));
+        let _ = launcher.update(Message::Ui(ui::Message::Navigate(-100)));
         assert_eq!(launcher.selected, 0);
     }
 }

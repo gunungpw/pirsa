@@ -61,6 +61,15 @@ cargo build --release
 
 The executable is `target\release\pirsa.exe`.
 
+The project is a Cargo workspace. For quicker focused iterations, build or test
+one layer without the others:
+
+```powershell
+cargo check -p pirsa-core
+cargo check -p pirsa-platform
+cargo check -p pirsa-ui
+```
+
 ### Static build
 
 Release builds statically link the MSVC C runtime via
@@ -162,33 +171,46 @@ active window's system menu.
 ## Project layout
 
 ```text
+crates/
+  core/                platform-independent logic (no iced or Windows deps)
+    src/
+      lib.rs           public models and module re-exports
+      model.rs         AppEntry, LaunchTarget, ScanResult, Icon, HotkeyStatus
+      calc.rs          safe expression parser and length-unit conversion
+      search.rs        fuzzy ranking with unit tests
+      usage.rs         persistent launch history
+      util.rs          normalization, SearchText, logging
+  platform/            Windows-specific integration (no iced)
+    src/
+      lib.rs           startup, shared request flags, platform re-exports
+      com.rs           RAII STA COM apartment guard
+      hotkey.rs        Alt+Space via RegisterHotKey
+      instance.rs      named mutex + named show/quit events
+      shell.rs         dedicated shell workers for scans and icons
+      tray.rs          notification-area icon and menu
+      apps.rs          Start Menu and AppsFolder scanning, ShellExecute
+      icons.rs         real app icon extraction via IShellItemImageFactory
+      window.rs        show/hide, centering, foreground handling
+  ui/                  iced view layer (no direct Windows or FFI code)
+    src/lib.rs         layout, colors, widget styles, UI messages, ViewModel trait
 src/
-  main.rs              iced application bootstrap and window settings
-  app.rs               launcher state, messages, keyboard handling
-  calc.rs              safe expression parser and length-unit conversion
-  ui.rs                layout, colors, custom widget styles
-  search.rs            fuzzy ranking with unit tests
-  usage.rs             persistent launch history for the "frequently used first" order
-  util.rs              best-effort logging to %LOCALAPPDATA%\Pirsa
-  platform/
-    mod.rs             startup, shared request flags, platform re-exports
-    com.rs             RAII STA COM apartment guard
-    hotkey.rs          Alt+Space via RegisterHotKey
-    instance.rs        named mutex + named show/quit events
-    shell.rs           dedicated shell worker for scans and icons
-    tray.rs            notification-area icon and menu
-    apps.rs            Start Menu and AppsFolder scanning, ShellExecute
-    icons.rs           real app icon extraction via IShellItemImageFactory
-    window.rs          show/hide, centering, foreground handling
+  main.rs              iced bootstrap and window settings
+  app.rs               launcher state, update logic, ViewModel implementation
 assets/
   andrsrxn--app-window.svg  source window glyph
-  pirsa-icon.svg            composed colored icon
+  pirsa-icon.svg            transparent Teal Light app icon
   icon.png / icon.ico      generated icon assets
   icon-64.rgba              raw pixels used for the runtime window icon
+  icon-variations/          alternative Teal glyph icon assets
 scripts/install.ps1    release build/install/startup helper
 scripts/make-icon.ps1  regenerate icon assets from the source SVG
+scripts/make-icon-variations.ps1  regenerate the alternative icons
 build.rs               embeds the icon and version metadata into the exe
 ```
+
+The workspace is split so focused changes stay quick: editing `pirsa-core`
+does not rebuild iced or Windows FFI code, `pirsa-platform` changes leave the
+UI crate alone, and `pirsa-ui` changes leave the platform crate alone.
 
 Regenerate the icon after editing the source SVG (requires ImageMagick 7):
 

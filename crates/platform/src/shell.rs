@@ -13,10 +13,12 @@ use std::time::Instant;
 
 use tokio::sync::oneshot;
 
-use super::apps::{self, AppEntry, ScanResult};
+use pirsa_core::util::log;
+use pirsa_core::{AppEntry, Icon, ScanResult};
+
+use super::apps;
 use super::com::ComApartment;
-use super::icons::{self, Icon};
-use crate::util::log;
+use super::icons;
 
 struct IconRequest {
     apps: Vec<AppEntry>,

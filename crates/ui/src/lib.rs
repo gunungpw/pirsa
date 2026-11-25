@@ -1,15 +1,43 @@
 //! The launcher's visual design.
 
+use std::collections::HashMap;
+
 use iced::border;
 use iced::widget::image::Handle;
 use iced::widget::text::Wrapping;
 use iced::widget::{Image, Space, button, column, container, mouse_area, row, text, text_input};
 use iced::{Alignment, Background, Border, Color, Element, Font, Length, Theme};
 
-use crate::app::{Launcher, Message};
-use crate::calc::{CalcKind, CalcResult};
-use crate::platform::HotkeyStatus;
-use crate::platform::apps::{AppEntry, LaunchTarget};
+use pirsa_core::calc::{CalcKind, CalcResult};
+use pirsa_core::{AppEntry, HotkeyStatus, LaunchTarget};
+
+/// UI-originated actions.
+#[derive(Debug, Clone)]
+pub enum Message {
+    QueryChanged(String),
+    ClearQuery,
+    Navigate(i32),
+    Activate(usize),
+    CopyCalc,
+    Hide,
+    Quit,
+    DragWindow,
+}
+
+/// Read-only state the view needs from the launcher.
+pub trait ViewModel {
+    fn apps(&self) -> &[AppEntry];
+    fn results(&self) -> &[usize];
+    fn calc(&self) -> Option<&CalcResult>;
+    fn icons(&self) -> &HashMap<String, Handle>;
+    fn query(&self) -> &str;
+    fn selected(&self) -> usize;
+    fn hotkey(&self) -> HotkeyStatus;
+    fn error(&self) -> Option<&str>;
+    fn warning(&self) -> Option<&str>;
+    fn indexing(&self) -> bool;
+    fn result_limit(&self) -> usize;
+}
 
 pub const WINDOW_WIDTH: f32 = 820.0;
 pub const WINDOW_HEIGHT: f32 = 540.0;
@@ -52,10 +80,10 @@ const ICON_COLORS: [Color; 8] = [
     Color::from_rgb8(0xbf, 0x6b, 0x5b),
 ];
 
-pub fn view(app: &Launcher) -> Element<'_, Message> {
+pub fn view(app: &impl ViewModel) -> Element<'_, Message> {
     let mut content = column![search_row(app), Space::new().height(12)];
 
-    if let Some(calc) = &app.calc {
+    if let Some(calc) = app.calc() {
         content = content.push(calc_card(app, calc));
         content = content.push(Space::new().height(CALC_GAP));
     }
@@ -77,8 +105,8 @@ pub fn view(app: &Launcher) -> Element<'_, Message> {
         .into()
 }
 
-fn search_row(app: &Launcher) -> Element<'_, Message> {
-    let field = text_input("Search apps, calculate, convert…", &app.query)
+fn search_row(app: &impl ViewModel) -> Element<'_, Message> {
+    let field = text_input("Search apps, calculate, convert…", app.query())
         .id(INPUT_ID)
         .on_input(Message::QueryChanged)
         .padding([0, 0])
@@ -87,7 +115,7 @@ fn search_row(app: &Launcher) -> Element<'_, Message> {
         .style(search_input_style)
         .width(Length::Fill);
 
-    let clear: Element<'_, Message> = if app.query.is_empty() {
+    let clear: Element<'_, Message> = if app.query().is_empty() {
         Space::new().width(22).into()
     } else {
         button(text("×").size(15).font(UI_FONT).color(MUTED))
@@ -102,7 +130,7 @@ fn search_row(app: &Launcher) -> Element<'_, Message> {
     row![
         field,
         clear,
-        hotkey_keycap(app.hotkey),
+        hotkey_keycap(app.hotkey()),
         button(text("×").size(17).font(UI_FONT))
             .on_press(Message::Hide)
             .width(28)
@@ -117,7 +145,7 @@ fn search_row(app: &Launcher) -> Element<'_, Message> {
     .into()
 }
 
-fn calc_card<'a>(app: &'a Launcher, calc: &'a CalcResult) -> Element<'a, Message> {
+fn calc_card<'a>(app: &'a impl ViewModel, calc: &'a CalcResult) -> Element<'a, Message> {
     let glyph = match calc.kind {
         CalcKind::Math => "=",
         CalcKind::Unit => "↔",
@@ -163,7 +191,7 @@ fn calc_card<'a>(app: &'a Launcher, calc: &'a CalcResult) -> Element<'a, Message
     .align_y(Alignment::Center)
     .spacing(12);
 
-    let selected = app.selected == 0;
+    let selected = app.selected() == 0;
 
     button(content)
         .on_press(Message::CopyCalc)
@@ -174,9 +202,9 @@ fn calc_card<'a>(app: &'a Launcher, calc: &'a CalcResult) -> Element<'a, Message
         .into()
 }
 
-fn section_label(app: &Launcher) -> Element<'_, Message> {
-    let query_empty = app.query.trim().is_empty();
-    let indexing = app.indexing && app.apps.is_empty();
+fn section_label(app: &impl ViewModel) -> Element<'_, Message> {
+    let query_empty = app.query().trim().is_empty();
+    let indexing = app.indexing() && app.apps().is_empty();
     let title = if indexing {
         "Indexing"
     } else if query_empty {
@@ -187,14 +215,14 @@ fn section_label(app: &Launcher) -> Element<'_, Message> {
     let count = if indexing {
         "SCANNING…".to_owned()
     } else if query_empty {
-        format!("{} APPS", app.apps.len())
+        format!("{} APPS", app.apps().len())
     } else {
-        format!("{} FOUND", app.results.len())
+        format!("{} FOUND", app.results().len())
     };
 
     let mut details = row![Space::new().width(Length::Fill)].align_y(Alignment::Center);
 
-    if app.warning.is_some() {
+    if app.warning().is_some() {
         details = details.push(text("PARTIAL INDEX").size(9).font(MONO_FONT).color(WARNING));
         details = details.push(Space::new().width(10));
     }
@@ -214,19 +242,19 @@ fn section_label(app: &Launcher) -> Element<'_, Message> {
     .into()
 }
 
-fn result_list(app: &Launcher) -> Element<'_, Message> {
+fn result_list(app: &impl ViewModel) -> Element<'_, Message> {
     let limit = app.result_limit();
     let height = limit as f32 * ROW_HEIGHT + (limit.saturating_sub(1)) as f32 * ROW_GAP;
 
-    let content: Element<'_, Message> = if app.results.is_empty() {
-        if app.calc.is_some() {
+    let content: Element<'_, Message> = if app.results().is_empty() {
+        if app.calc().is_some() {
             Space::new().into()
         } else {
             empty_state(app)
         }
     } else {
         let rows: Vec<Element<'_, Message>> = app
-            .results
+            .results()
             .iter()
             .take(limit)
             .enumerate()
@@ -243,18 +271,18 @@ fn result_list(app: &Launcher) -> Element<'_, Message> {
         .into()
 }
 
-fn result_row(app: &Launcher, app_index: usize, position: usize) -> Element<'_, Message> {
-    let Some(entry) = app.apps.get(app_index) else {
+fn result_row(app: &impl ViewModel, app_index: usize, position: usize) -> Element<'_, Message> {
+    let Some(entry) = app.apps().get(app_index) else {
         return Space::new().into();
     };
 
-    let selected = position + usize::from(app.calc.is_some()) == app.selected;
+    let selected = position + usize::from(app.calc().is_some()) == app.selected();
 
     // `button` places its content at the top-left, so the row has to claim the
     // full height and center its items itself. Otherwise the selected
     // highlight extends well below the icon and label.
     let content = row![
-        icon_element(entry, app.icons.get(entry.name())),
+        icon_element(entry, app.icons().get(entry.name())),
         row![
             text(entry.name())
                 .size(15)
@@ -293,20 +321,20 @@ fn result_row(app: &Launcher, app_index: usize, position: usize) -> Element<'_, 
         .into()
 }
 
-fn empty_state(app: &Launcher) -> Element<'_, Message> {
-    let (title, subtitle) = if app.indexing {
+fn empty_state(app: &impl ViewModel) -> Element<'_, Message> {
+    let (title, subtitle) = if app.indexing() {
         (
             "Indexing Start Menu…".to_owned(),
             "Apps will appear in a moment.".to_owned(),
         )
-    } else if app.apps.is_empty() {
+    } else if app.apps().is_empty() {
         (
             "No apps indexed".to_owned(),
             "Press F5 to scan the Start Menu again.".to_owned(),
         )
     } else {
         (
-            format!("No matches for “{}”", app.query.trim()),
+            format!("No matches for “{}”", app.query().trim()),
             "Try a different name, or press Esc to close.".to_owned(),
         )
     };
@@ -326,16 +354,16 @@ fn empty_state(app: &Launcher) -> Element<'_, Message> {
     .into()
 }
 
-fn footer(app: &Launcher) -> Element<'_, Message> {
+fn footer(app: &impl ViewModel) -> Element<'_, Message> {
     let quit = button(text("Quit").size(10).font(UI_FONT))
         .on_press(Message::Quit)
         .padding([3, 7])
         .style(ghost_button_style);
 
-    if let Some(error) = &app.error {
+    if let Some(error) = app.error() {
         return row![
             status_dot(DANGER),
-            text(error.as_str()).size(10).font(UI_FONT).color(DANGER),
+            text(error).size(10).font(UI_FONT).color(DANGER),
             Space::new().width(Length::Fill),
             quit,
         ]
@@ -345,13 +373,13 @@ fn footer(app: &Launcher) -> Element<'_, Message> {
         .into();
     }
 
-    let (color, label) = match app.hotkey {
+    let (color, label) = match app.hotkey() {
         HotkeyStatus::Ready => (SUCCESS, "Alt+Space"),
         HotkeyStatus::Unavailable => (DANGER, "Alt+Space unavailable"),
         HotkeyStatus::Pending => (DIM, "Starting…"),
     };
 
-    let primary_action = if app.calc.is_some() && app.selected == 0 {
+    let primary_action = if app.calc().is_some() && app.selected() == 0 {
         "Copy"
     } else {
         "Open"

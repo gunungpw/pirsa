@@ -18,26 +18,16 @@ use windows::Win32::UI::Shell::{
 };
 use windows::core::PCWSTR;
 
+use pirsa_core::util::log;
+use pirsa_core::{AppEntry, Icon, LaunchTarget};
+
 use super::com::ComApartment;
-use crate::platform::apps::{AppEntry, LaunchTarget};
-use crate::util::log;
 
 /// Size requested from the shell. Larger than the 30 px row tile so the icon
 /// stays crisp on scaled displays.
 const ICON_SIZE: i32 = 64;
 /// Sanity bound for a bitmap the shell reports back.
 const MAX_ICON_SIDE: i32 = 512;
-
-/// A decoded RGBA icon bitmap.
-#[derive(Debug, Clone)]
-pub struct Icon {
-    /// Pixel width.
-    pub width: u32,
-    /// Pixel height.
-    pub height: u32,
-    /// Straight (non-premultiplied) RGBA pixels, rows from the top.
-    pub rgba: Vec<u8>,
-}
 
 /// Extracts an icon for every app the shell can provide one for.
 ///
@@ -51,11 +41,13 @@ pub(crate) fn extract(apps: &[AppEntry]) -> Vec<(String, Icon)> {
         .filter_map(|app| icon_for(app.target()).map(|icon| (app.name().to_owned(), icon)))
         .collect();
 
-    log(format!(
-        "loaded {} app icons for {} apps",
-        icons.len(),
-        apps.len()
-    ));
+    if !cfg!(test) {
+        log(format!(
+            "loaded {} app icons for {} apps",
+            icons.len(),
+            apps.len()
+        ));
+    }
 
     icons
 }

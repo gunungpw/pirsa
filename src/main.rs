@@ -4,15 +4,12 @@
 compile_error!("Pirsa only supports Windows.");
 
 mod app;
-mod calc;
-mod platform;
-mod search;
-mod ui;
-mod usage;
-mod util;
 
 use iced::window;
 use iced::{Size, Theme};
+use pirsa_core::util;
+use pirsa_platform as platform;
+use pirsa_ui as ui;
 
 use crate::app::Launcher;
 

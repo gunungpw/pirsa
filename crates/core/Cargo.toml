@@ -1,0 +1,13 @@
+[package]
+name = "pirsa-core"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Platform-independent logic and models for Pirsa"
+
+[lib]
+name = "pirsa_core"
+path = "src/lib.rs"
+
+[dependencies]

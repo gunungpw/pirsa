@@ -16,27 +16,14 @@ use windows::Win32::UI::WindowsAndMessaging::{
     DispatchMessageW, GetMessageW, MSG, TranslateMessage, WM_HOTKEY,
 };
 
-use crate::platform::request_toggle;
-use crate::util::log;
+use pirsa_core::HotkeyStatus;
+use pirsa_core::util::log;
+
+use crate::request_toggle;
 
 const HOTKEY_ID: i32 = 0x4C55;
 
 static STATUS: AtomicU8 = AtomicU8::new(HotkeyStatus::Pending as u8);
-
-/// Whether the global hotkey could be installed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[repr(u8)]
-pub enum HotkeyStatus {
-    Pending = 0,
-    Ready = 1,
-    Unavailable = 2,
-}
-
-impl HotkeyStatus {
-    pub fn available(self) -> bool {
-        self == Self::Ready
-    }
-}
 
 pub fn status() -> HotkeyStatus {
     match STATUS.load(Ordering::Relaxed) {
