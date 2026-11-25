@@ -1,7 +1,7 @@
 //! Small utilities shared by the launcher.
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -129,6 +129,23 @@ pub fn log(message: impl AsRef<str>) {
 /// The per-user data directory for the launcher.
 pub fn data_directory() -> Option<PathBuf> {
     std::env::var_os("LOCALAPPDATA").map(|base| PathBuf::from(base).join("Pirsa"))
+}
+
+/// Writes `body` to `temporary`, then atomically renames it over `destination`.
+pub(crate) fn write_atomic(
+    temporary: &Path,
+    destination: &Path,
+    body: &[u8],
+) -> std::io::Result<()> {
+    {
+        let mut file = std::fs::File::create(temporary)?;
+        file.write_all(body)?;
+        file.flush()?;
+    }
+
+    std::fs::rename(temporary, destination).inspect_err(|_| {
+        let _ = std::fs::remove_file(temporary);
+    })
 }
 
 #[cfg(test)]

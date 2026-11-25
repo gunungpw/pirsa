@@ -8,10 +8,11 @@ use iced::keyboard::key::Named;
 use iced::keyboard::{Event as KeyboardEvent, Key, Modifiers};
 use iced::widget::image::Handle;
 use iced::widget::operation;
-use iced::{Element, Event, Subscription, Task, window};
+use iced::{Element, Event, Font, Subscription, Task, Theme, window};
 
 use pirsa_core::calc::{self, CalcResult};
 use pirsa_core::search;
+use pirsa_core::settings::{Settings, ThemeChoice};
 use pirsa_core::usage::Usage;
 use pirsa_core::util;
 use pirsa_core::{AppEntry, HotkeyStatus, Icon, ScanResult};
@@ -28,11 +29,14 @@ pub struct Launcher {
     pub(crate) usage: Usage,
     /// Real application icons, keyed by display name.
     pub(crate) icons: HashMap<String, Handle>,
+    pub(crate) settings: Settings,
+    pub(crate) theme: Theme,
     pub(crate) query: String,
     pub(crate) selected: usize,
     pub(crate) visible: bool,
     pub(crate) focused: bool,
     pub(crate) window_id: Option<window::Id>,
+    pub(crate) settings_window: Option<window::Id>,
     pub(crate) hwnd: Option<isize>,
     pub(crate) hotkey: HotkeyStatus,
     pub(crate) error: Option<String>,
@@ -47,6 +51,8 @@ pub struct Launcher {
 #[derive(Debug, Clone)]
 pub enum Message {
     Ui(ui::Message),
+    Settings(ui::SettingsMessage),
+    SettingsOpened(window::Id),
     Platform,
     EnsureFocus,
     WindowReady(window::Id, isize),
@@ -58,22 +64,26 @@ pub enum Message {
         generation: u64,
         icons: Vec<(String, Icon)>,
     },
-    Event(Event),
+    Event(window::Id, Event),
 }
 
 impl Launcher {
-    pub fn boot() -> (Self, Task<Message>) {
+    pub fn boot(settings: Settings) -> (Self, Task<Message>) {
+        let theme = theme_from_choice(settings.theme);
         let mut launcher = Self {
             apps: Vec::new(),
             results: Vec::new(),
             calc: None,
             usage: Usage::load(),
             icons: HashMap::new(),
+            settings,
+            theme,
             query: String::new(),
             selected: 0,
             visible: platform::start_visible(),
             focused: false,
             window_id: None,
+            settings_window: None,
             hwnd: None,
             hotkey: platform::hotkey_status(),
             error: None,
@@ -83,19 +93,17 @@ impl Launcher {
             icon_generation: 0,
         };
 
-        let ready: Task<Message> = window::oldest().and_then(|id| {
+        let (window_id, open) = window::open(launcher_window_settings(launcher.visible));
+        launcher.window_id = Some(window_id);
+
+        let ready = open.then(move |id| {
             window::raw_id::<Message>(id).map(move |raw| Message::WindowReady(id, raw as isize))
         });
 
         // Do not block window creation on the Start Menu scan. The window
         // appears immediately while the shell worker indexes in the background.
         let scan = launcher.begin_scan();
-
-        let task = if launcher.visible {
-            Task::batch([ready, focus_input(), scan])
-        } else {
-            Task::batch([ready, scan])
-        };
+        let task = Task::batch([ready, scan]);
 
         (launcher, task)
     }
@@ -103,6 +111,11 @@ impl Launcher {
     pub fn update(&mut self, message: Message) -> Task<Message> {
         match message {
             Message::Ui(message) => self.update_ui(message),
+            Message::Settings(message) => self.update_settings(message),
+            Message::SettingsOpened(id) => {
+                self.settings_window = Some(id);
+                Task::none()
+            }
             Message::Platform => self.tick(),
             Message::EnsureFocus => self.ensure_focus(),
             Message::ScanComplete { generation, scan } => self.apply_scan(generation, scan),
@@ -138,7 +151,7 @@ impl Launcher {
                     Task::none()
                 }
             }
-            Message::Event(event) => self.handle_event(event),
+            Message::Event(window, event) => self.handle_event(window, event),
         }
     }
 
@@ -176,7 +189,7 @@ impl Launcher {
             }
             ui::Message::Activate(index) => self.activate(index),
             ui::Message::CopyCalc => self.copy_calc(),
-            ui::Message::Hide => self.hide(),
+            ui::Message::OpenSettings => self.open_settings(),
             ui::Message::Quit => iced::exit(),
             ui::Message::DragWindow => self
                 .window_id
@@ -185,8 +198,67 @@ impl Launcher {
         }
     }
 
-    pub fn view(&self) -> Element<'_, Message> {
-        ui::view(self).map(Message::Ui)
+    fn update_settings(&mut self, message: ui::SettingsMessage) -> Task<Message> {
+        match message {
+            ui::SettingsMessage::FontChanged(font) => {
+                self.settings.font = font;
+                self.settings.save();
+                Task::none()
+            }
+            ui::SettingsMessage::AppNameFontChanged(font) => {
+                self.settings.app_name_font = font;
+                self.settings.save();
+                Task::none()
+            }
+            ui::SettingsMessage::CategoryFontChanged(font) => {
+                self.settings.category_font = font;
+                self.settings.save();
+                Task::none()
+            }
+            ui::SettingsMessage::ThemeChanged(theme) => {
+                self.settings.theme = theme;
+                self.theme = theme_from_choice(theme);
+                self.settings.save();
+                Task::none()
+            }
+            ui::SettingsMessage::Close => self
+                .settings_window
+                .map(window::close::<Message>)
+                .unwrap_or_else(Task::none),
+        }
+    }
+
+    fn open_settings(&mut self) -> Task<Message> {
+        let task = if let Some(id) = self.settings_window {
+            window::gain_focus::<Message>(id)
+        } else {
+            let (id, open) = window::open(settings_window_settings());
+            self.settings_window = Some(id);
+            util::log("opening settings window");
+            open.map(Message::SettingsOpened)
+        };
+
+        Task::batch([task, self.hide()])
+    }
+
+    pub fn view(&self, window: window::Id) -> Element<'_, Message> {
+        if self.settings_window == Some(window) {
+            ui::settings_view(&self.settings, &self.theme).map(Message::Settings)
+        } else {
+            ui::view(self).map(Message::Ui)
+        }
+    }
+
+    pub fn title(&self, window: window::Id) -> String {
+        if self.settings_window == Some(window) {
+            "Pirsa Settings".to_owned()
+        } else {
+            "Pirsa".to_owned()
+        }
+    }
+
+    pub fn window_theme(&self) -> Theme {
+        self.theme.clone()
     }
 
     pub fn subscription(&self) -> Subscription<Message> {
@@ -204,8 +276,8 @@ impl Launcher {
 
         Subscription::batch([
             platform_signals,
-            iced::event::listen_with(|event, _status, _window| match event {
-                Event::Keyboard(_) | Event::Window(_) => Some(Message::Event(event)),
+            iced::event::listen_with(|event, _status, window| match event {
+                Event::Keyboard(_) | Event::Window(_) => Some(Message::Event(window, event)),
                 _ => None,
             }),
         ])
@@ -216,6 +288,10 @@ impl Launcher {
 
         if requests.quit {
             return iced::exit();
+        }
+
+        if requests.settings {
+            return self.open_settings();
         }
 
         if requests.show {
@@ -446,7 +522,16 @@ impl Launcher {
         self.results.len().min(self.result_limit()) + usize::from(self.calc.is_some())
     }
 
-    fn handle_event(&mut self, event: Event) -> Task<Message> {
+    fn handle_event(&mut self, window_id: window::Id, event: Event) -> Task<Message> {
+        if self.settings_window == Some(window_id) {
+            if matches!(event, Event::Window(window::Event::Closed)) {
+                self.settings_window = None;
+                util::log("settings window closed");
+            }
+
+            return Task::none();
+        }
+
         match event {
             Event::Keyboard(KeyboardEvent::KeyPressed {
                 key,
@@ -481,6 +566,10 @@ impl Launcher {
 
         if modifiers.control() && matches!(key, Key::Character("q") | Key::Character("Q")) {
             return iced::exit();
+        }
+
+        if modifiers.control() && matches!(key, Key::Character(",")) {
+            return self.open_settings();
         }
 
         if repeat {
@@ -543,6 +632,22 @@ impl ui::ViewModel for Launcher {
         self.indexing
     }
 
+    fn theme(&self) -> &Theme {
+        &self.theme
+    }
+
+    fn font(&self) -> Font {
+        Font::with_name(self.settings.font.name())
+    }
+
+    fn app_name_font(&self) -> Font {
+        Font::with_name(self.settings.app_name_font.name())
+    }
+
+    fn category_font(&self) -> Font {
+        Font::with_name(self.settings.category_font.name())
+    }
+
     fn result_limit(&self) -> usize {
         Launcher::result_limit(self)
     }
@@ -559,6 +664,76 @@ fn ensure_focus_later() -> Task<Message> {
     })
 }
 
+fn launcher_window_settings(visible: bool) -> window::Settings {
+    let platform_specific = window::settings::PlatformSpecific {
+        skip_taskbar: true,
+        undecorated_shadow: true,
+        corner_preference: window::settings::platform::CornerPreference::RoundSmall,
+        ..window::settings::PlatformSpecific::default()
+    };
+
+    window::Settings {
+        size: iced::Size::new(ui::WINDOW_WIDTH, ui::WINDOW_HEIGHT),
+        position: window::Position::Centered,
+        resizable: false,
+        minimizable: false,
+        closeable: false,
+        decorations: false,
+        transparent: false,
+        visible,
+        icon: app_icon(),
+        exit_on_close_request: false,
+        platform_specific,
+        ..window::Settings::default()
+    }
+}
+
+fn settings_window_settings() -> window::Settings {
+    window::Settings {
+        size: iced::Size::new(ui::SETTINGS_WINDOW_WIDTH, ui::SETTINGS_WINDOW_HEIGHT),
+        position: window::Position::Centered,
+        resizable: false,
+        minimizable: false,
+        closeable: true,
+        decorations: true,
+        transparent: false,
+        visible: true,
+        icon: app_icon(),
+        exit_on_close_request: true,
+        ..window::Settings::default()
+    }
+}
+
+fn app_icon() -> Option<window::icon::Icon> {
+    window::icon::from_rgba(include_bytes!("../assets/icon-64.rgba").to_vec(), 64, 64).ok()
+}
+
+fn theme_from_choice(choice: ThemeChoice) -> Theme {
+    match choice {
+        ThemeChoice::Light => Theme::Light,
+        ThemeChoice::Dark => Theme::custom(
+            "Pirsa Dark",
+            iced::theme::Palette {
+                background: iced::Color::from_rgb8(0x15, 0x18, 0x20),
+                text: iced::Color::from_rgb8(0xf3, 0xf5, 0xf9),
+                primary: iced::Color::from_rgb8(0x7a, 0xa2, 0xf7),
+                success: iced::Color::from_rgb8(0x73, 0xd8, 0xa3),
+                warning: iced::Color::from_rgb8(0xe0, 0xaf, 0x68),
+                danger: iced::Color::from_rgb8(0xf0, 0x7a, 0x8c),
+            },
+        ),
+        ThemeChoice::Nord => Theme::Nord,
+        ThemeChoice::Dracula => Theme::Dracula,
+        ThemeChoice::GruvboxDark => Theme::GruvboxDark,
+        ThemeChoice::CatppuccinMocha => Theme::CatppuccinMocha,
+        ThemeChoice::TokyoNight => Theme::TokyoNight,
+        ThemeChoice::SolarizedLight => Theme::SolarizedLight,
+        ThemeChoice::GruvboxLight => Theme::GruvboxLight,
+        ThemeChoice::CatppuccinLatte => Theme::CatppuccinLatte,
+        ThemeChoice::TokyoNightLight => Theme::TokyoNightLight,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -570,11 +745,14 @@ mod tests {
             calc: None,
             usage: Usage::default(),
             icons: HashMap::new(),
+            settings: Settings::default(),
+            theme: theme_from_choice(ThemeChoice::Dark),
             query: String::new(),
             selected: 0,
             visible: true,
             focused: false,
             window_id: None,
+            settings_window: None,
             hwnd: None,
             hotkey: HotkeyStatus::Pending,
             error: None,

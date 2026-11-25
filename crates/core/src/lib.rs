@@ -7,9 +7,11 @@
 pub mod calc;
 pub mod model;
 pub mod search;
+pub mod settings;
 pub mod usage;
 pub mod util;
 
 pub use calc::{CalcKind, CalcResult};
 pub use model::{AppEntry, HotkeyStatus, Icon, LaunchTarget, ScanResult};
+pub use settings::{FontChoice, Settings, ThemeChoice};
 pub use usage::Usage;

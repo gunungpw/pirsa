@@ -19,3 +19,6 @@ iced = { version = "0.14", default-features = false, features = [
     "crisp",
     "image-without-codecs",
 ] }
+
+[dev-dependencies]
+iced_tester = "0.14"

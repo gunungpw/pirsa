@@ -23,13 +23,14 @@ use windows::core::{PCWSTR, w};
 
 use pirsa_core::util::log;
 
-use crate::{request_quit, request_show};
+use crate::{request_quit, request_settings, request_show};
 
 const TRAY_ID: u32 = 1;
 const CALLBACK_MESSAGE: u32 = WM_APP + 1;
 const CLASS_NAME: PCWSTR = w!("PirsaTrayWindow");
 const MENU_OPEN: usize = 1;
-const MENU_QUIT: usize = 2;
+const MENU_SETTINGS: usize = 2;
+const MENU_QUIT: usize = 3;
 const TOOLTIP: &str = "Pirsa — Alt+Space";
 
 static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
@@ -159,6 +160,7 @@ unsafe fn show_menu(hwnd: HWND) {
     };
 
     let _ = unsafe { AppendMenuW(menu, MF_STRING, MENU_OPEN, w!("Open Pirsa")) };
+    let _ = unsafe { AppendMenuW(menu, MF_STRING, MENU_SETTINGS, w!("Settings…")) };
     let _ = unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null()) };
     let _ = unsafe { AppendMenuW(menu, MF_STRING, MENU_QUIT, w!("Quit Pirsa")) };
 
@@ -186,6 +188,7 @@ unsafe fn show_menu(hwnd: HWND) {
 
     match command.0 as usize {
         MENU_OPEN => request_show(),
+        MENU_SETTINGS => request_settings(),
         MENU_QUIT => request_quit(),
         _ => {}
     }

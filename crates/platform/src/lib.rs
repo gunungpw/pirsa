@@ -23,6 +23,7 @@ pub use shell::{extract_icons, scan};
 
 static TOGGLE_REQUESTED: AtomicBool = AtomicBool::new(false);
 static SHOW_REQUESTED: AtomicBool = AtomicBool::new(false);
+static SETTINGS_REQUESTED: AtomicBool = AtomicBool::new(false);
 static QUIT_REQUESTED: AtomicBool = AtomicBool::new(false);
 static START_VISIBLE: AtomicBool = AtomicBool::new(false);
 static SIGNAL: OnceLock<Notify> = OnceLock::new();
@@ -33,6 +34,7 @@ static SIGNAL: OnceLock<Notify> = OnceLock::new();
 pub struct Requests {
     pub show: bool,
     pub toggle: bool,
+    pub settings: bool,
     pub quit: bool,
 }
 
@@ -77,6 +79,11 @@ pub fn request_toggle() {
     signal();
 }
 
+pub fn request_settings() {
+    SETTINGS_REQUESTED.store(true, Ordering::SeqCst);
+    signal();
+}
+
 pub fn request_quit() {
     QUIT_REQUESTED.store(true, Ordering::SeqCst);
     signal();
@@ -92,6 +99,7 @@ pub fn take_requests() -> Requests {
     Requests {
         show: SHOW_REQUESTED.swap(false, Ordering::SeqCst),
         toggle: TOGGLE_REQUESTED.swap(false, Ordering::SeqCst),
+        settings: SETTINGS_REQUESTED.swap(false, Ordering::SeqCst),
         quit: QUIT_REQUESTED.swap(false, Ordering::SeqCst),
     }
 }

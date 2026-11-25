@@ -5,6 +5,34 @@ All notable changes to Pirsa are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-11-26
+
+### Added
+
+- Settings window, opened with **Ctrl+,**, the footer **Settings** button, or the
+  tray menu. It offers separate fonts for UI, app names, and category text, plus
+  Light, Dark, Nord, Dracula, Gruvbox, Catppuccin, Tokyo Night, and Solarized
+  themes. There is intentionally no "follow system" option.
+- Appearance settings persist in `%LOCALAPPDATA%\Pirsa\settings.txt`.
+- `Ctrl+,` opens settings from the launcher.
+- `iced_tester` dev-dependency with headless widget tests for launcher rows, the
+  Settings button, and the settings view.
+- App-name and category fonts are stored as separate settings. Legacy
+  `settings.txt` files with one `font=` entry apply that font to all three.
+
+### Changed
+
+- Launcher colours are now derived from the active iced theme palette instead of
+  hardcoded dark colours. Dark remains Pirsa's original custom palette.
+- Text in the launcher and settings views uses the selected font.
+- Removed the top-right `ALT + SPACE` keycap and close button from the search
+  row. The footer still shows the hotkey status; **Esc** hides the launcher.
+
+### Removed
+
+- Removed the unused icon-variation assets and their generator script. The
+  Teal Light app icon itself is unchanged.
+
 ## [0.6.0] - 2026-11-26
 
 ### Added

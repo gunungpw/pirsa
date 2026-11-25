@@ -6,7 +6,6 @@
 //! by the normalized application name.
 
 use std::collections::HashMap;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -134,7 +133,7 @@ impl Usage {
 
         let temporary = path.with_extension("tmp");
 
-        if let Err(error) = write_atomic(&temporary, path, body.as_bytes()) {
+        if let Err(error) = util::write_atomic(&temporary, path, body.as_bytes()) {
             util::log(format!("could not save usage history: {error}"));
         }
     }
@@ -177,18 +176,6 @@ fn history_path() -> PathBuf {
     util::data_directory()
         .map(|directory| directory.join(FILE_NAME))
         .unwrap_or_else(|| PathBuf::from(FILE_NAME))
-}
-
-fn write_atomic(temporary: &Path, destination: &Path, body: &[u8]) -> std::io::Result<()> {
-    {
-        let mut file = std::fs::File::create(temporary)?;
-        file.write_all(body)?;
-        file.flush()?;
-    }
-
-    std::fs::rename(temporary, destination).inspect_err(|_| {
-        let _ = std::fs::remove_file(temporary);
-    })
 }
 
 fn now() -> u64 {

@@ -34,8 +34,13 @@ Pirsa searches the Start Menu (including Store/UWP apps) and gets out of the way
 - **Keyboard-first** — arrow keys to move, Enter to launch, Esc to hide.
 - **One instance** — launching `pirsa.exe` again reveals the running launcher
   instead of starting a second copy.
-- **Tray icon** — left-click it to open Pirsa; right-click for **Open** and
-  **Quit**. The icon is restored automatically if Explorer restarts.
+- **Tray icon** — left-click it to open Pirsa; right-click for **Open**,
+  **Settings**, and **Quit**. The icon is restored automatically if Explorer
+  restarts.
+- **Settings window** — change UI, app-name, and category fonts independently,
+  and choose Light, Dark, Nord, Dracula, Gruvbox, Catppuccin, Tokyo Night, or
+  Solarized themes. Changes apply immediately and persist in
+  `%LOCALAPPDATA%\Pirsa\settings.txt`.
 - **Focus-aware** — hiding returns focus to the window you came from; clicking
   elsewhere auto-hides the launcher.
 - **Native and small** — one executable, no WebView, no runtime dependencies.
@@ -87,6 +92,15 @@ cargo run -- --show
 `--show` starts with the window visible. Without it, Pirsa starts hidden and waits
 for Alt+Space.
 
+### Testing
+
+```powershell
+cargo test --workspace
+```
+
+`pirsa-ui` uses the `iced_tester` dev-dependency to exercise the launcher and
+settings views headlessly. GUI tests must not launch the app or use screenshots.
+
 ## Install (optional)
 
 The install script builds the release binary, copies it to
@@ -120,11 +134,12 @@ footer or with **Ctrl+Q** while it is focused.
 | `Enter` | Copy the selected calculation, or launch the selected app |
 | `Esc` | Hide the launcher |
 | `Ctrl+Q` | Quit Pirsa |
+| `Ctrl+,` | Open the settings window |
 | `F5` | Rescan the Start Menu |
 | Click a row | Launch that app or copy that calculation |
 | Drag the app-list heading | Move the window |
 | Tray icon left-click | Open Pirsa |
-| Tray icon right-click | Open or quit Pirsa |
+| Tray icon right-click | Open, Settings, or quit Pirsa |
 
 ## Calculator and unit conversion
 
@@ -141,6 +156,24 @@ Type an expression and the result card appears above the app results:
 
 The calculation card is selected first; pressing Enter copies its result.
 Press ↓ to select the first app row instead.
+
+## Settings
+
+Open the settings window with **Ctrl+,**, the **Settings** button in the footer,
+or the tray menu. You can change:
+
+- **UI font** — Segoe UI, Segoe UI Variable, Arial, Calibri, Cambria, Cascadia
+  Code, Cascadia Mono, Consolas, Georgia, Microsoft YaHei, Tahoma, Trebuchet MS,
+  or Verdana.
+- **App name font** — a separate font for application names in the result list.
+- **Category font** — a separate font for the category/detail text beside app
+  names.
+- **Theme** — Light, Dark (Pirsa's original dark palette), Nord, Dracula, Gruvbox
+  Dark/Light, Catppuccin Mocha/Latte, Tokyo Night/Light, or Solarized Light.
+
+There is deliberately **no “follow system”** theme option. Changes apply to both
+windows immediately and are saved to
+`%LOCALAPPDATA%\Pirsa\settings.txt`.
 
 ## How indexing works
 
@@ -178,6 +211,7 @@ crates/
       model.rs         AppEntry, LaunchTarget, ScanResult, Icon, HotkeyStatus
       calc.rs          safe expression parser and length-unit conversion
       search.rs        fuzzy ranking with unit tests
+      settings.rs      font/theme choices and persistent settings
       usage.rs         persistent launch history
       util.rs          normalization, SearchText, logging
   platform/            Windows-specific integration (no iced)
@@ -192,19 +226,17 @@ crates/
       icons.rs         real app icon extraction via IShellItemImageFactory
       window.rs        show/hide, centering, foreground handling
   ui/                  iced view layer (no direct Windows or FFI code)
-    src/lib.rs         layout, colors, widget styles, UI messages, ViewModel trait
+    src/lib.rs         launcher/settings views, theme colors, widget styles
 src/
-  main.rs              iced bootstrap and window settings
-  app.rs               launcher state, update logic, ViewModel implementation
+  main.rs              iced daemon bootstrap
+  app.rs               launcher state, settings window, ViewModel implementation
 assets/
   andrsrxn--app-window.svg  source window glyph
   pirsa-icon.svg            transparent Teal Light app icon
   icon.png / icon.ico      generated icon assets
   icon-64.rgba              raw pixels used for the runtime window icon
-  icon-variations/          alternative Teal glyph icon assets
 scripts/install.ps1    release build/install/startup helper
 scripts/make-icon.ps1  regenerate icon assets from the source SVG
-scripts/make-icon-variations.ps1  regenerate the alternative icons
 build.rs               embeds the icon and version metadata into the exe
 ```
 
