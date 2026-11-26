@@ -1,4 +1,4 @@
-//! Bounded filesystem search behind the `~` / `>` query prefixes.
+//! Bounded folder search behind the `~` / `>` query prefixes.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
@@ -7,7 +7,7 @@ use windows::Win32::UI::Shell::ShellExecuteW;
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 use windows::core::{PCWSTR, w};
 
-use pirsa_core::FileEntry;
+use pirsa_core::FolderEntry;
 use pirsa_core::util::log;
 
 /// Deepest folder level the walk descends into.
@@ -39,9 +39,9 @@ const SKIPPED_DIRECTORIES: &[&str] = &[
     "Program Files (x86)",
 ];
 
-/// Searches the user's profile for files and folders whose name contains
-/// `term`. Runs on a blocking thread; keep the caller's expectations bounded.
-pub(crate) fn search(term: &str) -> Vec<FileEntry> {
+/// Searches the user's profile for folders whose name contains `term`. Runs on
+/// a blocking thread; keep the caller's expectations bounded.
+pub(crate) fn search(term: &str) -> Vec<FolderEntry> {
     let needle = term.trim().to_lowercase();
 
     if needle.is_empty() {
@@ -80,31 +80,34 @@ pub(crate) fn search(term: &str) -> Vec<FileEntry> {
             let Ok(file_type) = entry.file_type() else {
                 continue;
             };
+
+            // Folder search only: files are never collected.
+            if !file_type.is_dir() {
+                continue;
+            }
+
             let name = entry.file_name().to_string_lossy().into_owned();
 
-            // Hidden entries are shell bookkeeping, not something to launch.
+            // Hidden folders are shell bookkeeping, not something to open.
             if name.starts_with('.') {
                 continue;
             }
 
-            let is_dir = file_type.is_dir();
-
-            if is_dir
-                && !SKIPPED_DIRECTORIES
-                    .iter()
-                    .any(|skip| name.eq_ignore_ascii_case(skip))
+            if !SKIPPED_DIRECTORIES
+                .iter()
+                .any(|skip| name.eq_ignore_ascii_case(skip))
             {
                 stack.push((entry.path(), depth + 1));
             }
 
             if name_matches(&name, &needle) {
-                found.push(FileEntry::new(entry.path(), name, is_dir));
+                found.push(FolderEntry::new(entry.path(), name));
             }
         }
     }
 
     log(format!(
-        "file search for {needle:?}: {} matches from {visited} entries in {:?}",
+        "folder search for {needle:?}: {} matches from {visited} entries in {:?}",
         found.len(),
         started.elapsed()
     ));
@@ -113,26 +116,26 @@ pub(crate) fn search(term: &str) -> Vec<FileEntry> {
 }
 
 /// Runs [`search`] on the blocking pool.
-pub async fn search_async(term: String) -> Vec<FileEntry> {
+pub async fn search_async(term: String) -> Vec<FolderEntry> {
     match tokio::task::spawn_blocking(move || search(&term)).await {
-        Ok(files) => files,
+        Ok(folders) => folders,
         Err(error) => {
-            log(format!("file search task failed: {error}"));
+            log(format!("folder search task failed: {error}"));
             Vec::new()
         }
     }
 }
 
-/// Opens a file or folder with its default handler.
-pub fn open_path(path: &Path) -> Result<(), String> {
+/// Opens a folder in Explorer.
+pub fn open_folder(path: &Path) -> Result<(), String> {
     let target = path.to_string_lossy();
-    let file = wide(&target);
+    let path = wide(&target);
 
     let result = unsafe {
         ShellExecuteW(
             None,
             w!("open"),
-            PCWSTR(file.as_ptr()),
+            PCWSTR(path.as_ptr()),
             PCWSTR::null(),
             PCWSTR::null(),
             SW_SHOWNORMAL,
@@ -146,7 +149,7 @@ pub fn open_path(path: &Path) -> Result<(), String> {
         return Err(format!("Windows could not open it (code {code}: {error})."));
     }
 
-    log(format!("opened {}", path.display()));
+    log(format!("opened folder {}", target));
     Ok(())
 }
 
@@ -164,8 +167,8 @@ mod tests {
 
     #[test]
     fn matching_ignores_case() {
-        assert!(name_matches("Annual Report.PDF", "report"));
-        assert!(!name_matches("notes.txt", "report"));
+        assert!(name_matches("Annual Report", "report"));
+        assert!(!name_matches("notes", "report"));
     }
 
     #[test]
@@ -191,7 +194,7 @@ mod tests {
     fn a_search_completes_against_the_real_profile() {
         // Smoke test for the walk itself: a name that cannot exist must come
         // back empty instead of panicking or hanging.
-        let found = search("pirsa-no-such-file-4f7c1a");
+        let found = search("pirsa-no-such-folder-4f7c1a");
 
         assert!(found.is_empty());
     }

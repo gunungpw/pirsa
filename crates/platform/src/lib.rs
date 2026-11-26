@@ -12,7 +12,7 @@ use tokio::sync::Notify;
 
 mod apps;
 mod com;
-mod files;
+mod folders;
 mod hotkey;
 mod icons;
 mod instance;
@@ -21,7 +21,7 @@ mod tray;
 mod window_memory;
 
 pub use apps::launch;
-pub use files::{open_path, search_async as search_files};
+pub use folders::{open_folder, search_async as search_folders};
 pub use hotkey::status as hotkey_status;
 pub use shell::{extract_icons, scan};
 

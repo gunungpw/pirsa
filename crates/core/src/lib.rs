@@ -5,7 +5,7 @@
 //! Windows or iced dependencies so changes here compile quickly.
 
 pub mod calc;
-pub mod files;
+pub mod folders;
 pub mod model;
 pub mod search;
 pub mod settings;
@@ -13,7 +13,7 @@ pub mod usage;
 pub mod util;
 
 pub use calc::{CalcKind, CalcResult};
-pub use files::{FileEntry, FileQuery};
+pub use folders::{FolderEntry, FolderQuery};
 pub use model::{AppEntry, HotkeyStatus, Icon, LaunchTarget, ScanResult};
 pub use settings::{FontChoice, HotkeyChoice, Settings, ThemeChoice};
 pub use usage::Usage;

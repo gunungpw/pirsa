@@ -2499,7 +2499,7 @@ dependencies = [
 
 [[package]]
 name = "pirsa"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "iced",
  "pirsa-core",
@@ -2511,14 +2511,14 @@ dependencies = [
 
 [[package]]
 name = "pirsa-core"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "criterion",
 ]
 
 [[package]]
 name = "pirsa-platform"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "pirsa-core",
  "tokio",
@@ -2527,7 +2527,7 @@ dependencies = [
 
 [[package]]
 name = "pirsa-ui"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "iced",
  "iced_tester",

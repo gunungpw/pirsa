@@ -11,7 +11,7 @@ use iced::widget::operation;
 use iced::{Element, Event, Font, Subscription, Task, Theme, window};
 
 use pirsa_core::calc::{self, CalcResult};
-use pirsa_core::files::{self as file_index, FileEntry, FileQuery};
+use pirsa_core::folders::{self as folder_index, FolderEntry, FolderQuery};
 use pirsa_core::search;
 use pirsa_core::settings::{HotkeyChoice, Settings, ThemeChoice};
 use pirsa_core::usage::Usage;
@@ -30,11 +30,11 @@ pub struct Launcher {
     pub(crate) usage: Usage,
     /// Real application icons, keyed by display name.
     pub(crate) icons: HashMap<String, Handle>,
-    /// Matches of the current `~` / `>` filesystem query.
-    pub(crate) files: Vec<FileEntry>,
-    pub(crate) file_results: Vec<usize>,
-    /// Present while the search field holds a file-mode query.
-    pub(crate) file_query: Option<FileQuery>,
+    /// Matches of the current `~` / `>` folder query.
+    pub(crate) folders: Vec<FolderEntry>,
+    pub(crate) folder_results: Vec<usize>,
+    /// Present while the search field holds a folder-mode query.
+    pub(crate) folder_query: Option<FolderQuery>,
     pub(crate) settings: Settings,
     pub(crate) theme: Theme,
     pub(crate) query: String,
@@ -54,8 +54,8 @@ pub struct Launcher {
     pub(crate) indexing: bool,
     /// Set when F5 arrives while a scan is running; runs once the scan lands.
     pub(crate) rescan_queued: bool,
-    /// Monotonic token for the newest file search; older results are discarded.
-    pub(crate) file_generation: u64,
+    /// Monotonic token for the newest folder search; older results are discarded.
+    pub(crate) folder_generation: u64,
     /// Monotonic token for the newest scan; older results are discarded.
     pub(crate) scan_generation: u64,
     /// Monotonic token for the newest icon batch; older results are discarded.
@@ -84,9 +84,9 @@ pub enum Message {
         status: HotkeyStatus,
     },
     /// Result of a `~` / `>` filesystem search.
-    FileSearchComplete {
+    FolderSearchComplete {
         generation: u64,
-        files: Vec<FileEntry>,
+        folders: Vec<FolderEntry>,
     },
     Event(window::Id, Event),
 }
@@ -100,9 +100,9 @@ impl Launcher {
             calc: None,
             usage: Usage::load(),
             icons: HashMap::new(),
-            files: Vec::new(),
-            file_results: Vec::new(),
-            file_query: None,
+            folders: Vec::new(),
+            folder_results: Vec::new(),
+            folder_query: None,
             settings,
             theme,
             query: String::new(),
@@ -119,7 +119,7 @@ impl Launcher {
             warning: None,
             indexing: true,
             rescan_queued: false,
-            file_generation: 0,
+            folder_generation: 0,
             scan_generation: 0,
             icon_generation: 0,
         };
@@ -181,12 +181,15 @@ impl Launcher {
 
                 Task::none()
             }
-            Message::FileSearchComplete { generation, files } => {
-                if generation != self.file_generation {
+            Message::FolderSearchComplete {
+                generation,
+                folders,
+            } => {
+                if generation != self.folder_generation {
                     return Task::none();
                 }
 
-                self.files = files;
+                self.folders = folders;
                 self.recompute();
 
                 Task::none()
@@ -234,7 +237,7 @@ impl Launcher {
                 Task::none()
             }
             ui::Message::Activate(key) => self.activate(&key),
-            ui::Message::ActivateFile(path) => self.open_path(&path),
+            ui::Message::ActivateFolder(path) => self.open_folder_path(&path),
             ui::Message::CopyCalc => self.copy_calc(),
             ui::Message::OpenSettings => self.open_settings(),
             ui::Message::Quit => iced::exit(),
@@ -248,25 +251,25 @@ impl Launcher {
     fn change_query(&mut self, query: String) -> Task<Message> {
         self.query = query;
         self.calc = calc::evaluate(&self.query);
-        self.file_query = file_index::parse_query(&self.query);
+        self.folder_query = folder_index::parse_query(&self.query);
         self.error = None;
 
-        if self.file_query.is_none() {
-            self.files.clear();
-            self.file_results.clear();
+        if self.folder_query.is_none() {
+            self.folders.clear();
+            self.folder_results.clear();
         }
 
         self.recompute();
         self.selected = 0;
 
-        match &self.file_query {
-            Some(file_query) if !file_query.is_empty() => {
-                self.begin_file_search(file_query.term().to_owned())
+        match &self.folder_query {
+            Some(folder_query) if !folder_query.is_empty() => {
+                self.begin_folder_search(folder_query.term().to_owned())
             }
             Some(_) => {
                 // A bare `~` or `>` shows the hint instead of walking the disk.
-                self.files.clear();
-                self.file_results.clear();
+                self.folders.clear();
+                self.folder_results.clear();
                 Task::none()
             }
             None => Task::none(),
@@ -276,9 +279,9 @@ impl Launcher {
     fn clear_query(&mut self) -> Task<Message> {
         self.query.clear();
         self.calc = None;
-        self.file_query = None;
-        self.files.clear();
-        self.file_results.clear();
+        self.folder_query = None;
+        self.folders.clear();
+        self.folder_results.clear();
         self.error = None;
         self.recompute();
         self.selected = 0;
@@ -286,18 +289,21 @@ impl Launcher {
     }
 
     /// Starts a debounced filesystem walk; stale results are dropped.
-    fn begin_file_search(&mut self, term: String) -> Task<Message> {
-        self.file_generation = self.file_generation.wrapping_add(1);
-        let generation = self.file_generation;
+    fn begin_folder_search(&mut self, term: String) -> Task<Message> {
+        self.folder_generation = self.folder_generation.wrapping_add(1);
+        let generation = self.folder_generation;
 
         Task::perform(
             async move {
                 // A burst of keystrokes should walk the profile once, not once
                 // per character.
                 tokio::time::sleep(Duration::from_millis(140)).await;
-                platform::search_files(term).await
+                platform::search_folders(term).await
             },
-            move |files| Message::FileSearchComplete { generation, files },
+            move |folders| Message::FolderSearchComplete {
+                generation,
+                folders,
+            },
         )
     }
 
@@ -378,22 +384,22 @@ impl Launcher {
 
     /// Borrows the read-only slice of state the launcher view renders.
     fn view_state(&self) -> ui::ViewState<'_> {
-        let file_mode = self.file_query.is_some();
+        let folder_mode = self.folder_query.is_some();
 
         ui::ViewState {
             apps: &self.apps,
             results: &self.results,
             calc: self.calc.as_ref(),
             icons: &self.icons,
-            files: &self.files,
-            file_results: &self.file_results,
-            file_term: self.file_query.as_ref().map(|query| query.term()),
+            folders: &self.folders,
+            folder_results: &self.folder_results,
+            folder_term: self.folder_query.as_ref().map(|query| query.term()),
             query: &self.query,
             selected: self.selected,
             hotkey: self.hotkey,
             hotkey_choice: self.settings.hotkey,
-            // The "no apps indexed" error is irrelevant while searching files.
-            error: if file_mode {
+            // The "no apps indexed" error is irrelevant while searching folders.
+            error: if folder_mode {
                 None
             } else {
                 self.error.as_deref()
@@ -569,8 +575,8 @@ impl Launcher {
     }
 
     fn activate_selected(&mut self) -> Task<Message> {
-        if self.file_query.is_some() {
-            return self.open_file(self.selected);
+        if self.folder_query.is_some() {
+            return self.open_folder(self.selected);
         }
 
         let position = if self.calc.is_some() {
@@ -604,30 +610,30 @@ impl Launcher {
     fn activate_number(&mut self, number: usize) -> Task<Message> {
         let position = number.saturating_sub(1);
 
-        if self.file_query.is_some() {
-            return self.open_file(position);
+        if self.folder_query.is_some() {
+            return self.open_folder(position);
         }
 
         // App rows start after the calculation card when one is visible.
         self.activate_position(position + usize::from(self.calc.is_some()))
     }
 
-    /// Opens the file result at `position`.
-    fn open_file(&mut self, position: usize) -> Task<Message> {
-        let Some(&index) = self.file_results.get(position) else {
+    /// Opens the folder result at `position`.
+    fn open_folder(&mut self, position: usize) -> Task<Message> {
+        let Some(&index) = self.folder_results.get(position) else {
             return Task::none();
         };
 
-        let Some(file) = self.files.get(index) else {
+        let Some(folder) = self.folders.get(index) else {
             return Task::none();
         };
 
-        let path = file.path().to_path_buf();
-        self.open_path(&path)
+        let path = folder.path().to_path_buf();
+        self.open_folder_path(&path)
     }
 
-    fn open_path(&mut self, path: &std::path::Path) -> Task<Message> {
-        if let Err(error) = platform::open_path(path) {
+    fn open_folder_path(&mut self, path: &std::path::Path) -> Task<Message> {
+        if let Err(error) = platform::open_folder(path) {
             let name = path
                 .file_name()
                 .map(|name| name.to_string_lossy().into_owned())
@@ -756,12 +762,12 @@ impl Launcher {
     }
 
     fn recompute(&mut self) {
-        if let Some(file_query) = &self.file_query {
-            self.file_results = file_index::rank(&self.files, file_query.term());
+        if let Some(folder_query) = &self.folder_query {
+            self.folder_results = folder_index::rank(&self.folders, folder_query.term());
             self.results.clear();
         } else {
             self.results = search::rank_with_usage(&self.apps, &self.query, &self.usage);
-            self.file_results.clear();
+            self.folder_results.clear();
         }
 
         let selectable = self.selectable_count();
@@ -773,7 +779,7 @@ impl Launcher {
 
     /// Number of rows that fit on screen in the current mode.
     pub(crate) fn result_limit(&self) -> usize {
-        if self.file_query.is_some() {
+        if self.folder_query.is_some() {
             ui::MAX_RESULTS
         } else if self.calc.is_some() {
             ui::MAX_RESULTS_WITH_CALC
@@ -782,10 +788,10 @@ impl Launcher {
         }
     }
 
-    /// Calculation card first, then the visible app or file rows.
+    /// Calculation card first, then the visible app or folder rows.
     fn selectable_count(&self) -> usize {
-        if self.file_query.is_some() {
-            return self.file_results.len().min(self.result_limit());
+        if self.folder_query.is_some() {
+            return self.folder_results.len().min(self.result_limit());
         }
 
         self.results.len().min(self.result_limit()) + usize::from(self.calc.is_some())
@@ -974,9 +980,9 @@ mod tests {
             calc: None,
             usage: Usage::default(),
             icons: HashMap::new(),
-            files: Vec::new(),
-            file_results: Vec::new(),
-            file_query: None,
+            folders: Vec::new(),
+            folder_results: Vec::new(),
+            folder_query: None,
             settings: Settings::default(),
             theme: theme_from_choice(ThemeChoice::Dark),
             query: String::new(),
@@ -993,7 +999,7 @@ mod tests {
             warning: None,
             indexing: false,
             rescan_queued: false,
-            file_generation: 0,
+            folder_generation: 0,
             scan_generation: 0,
             icon_generation: 0,
         }
@@ -1132,61 +1138,61 @@ mod tests {
         assert_eq!(launcher.selected, 0);
     }
 
-    fn file_entry(path: &str, is_dir: bool) -> FileEntry {
+    fn folder_entry(path: &str) -> FolderEntry {
         let path = std::path::PathBuf::from(path);
         let name = path
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
 
-        FileEntry::new(path, name, is_dir)
+        FolderEntry::new(path, name)
     }
 
     #[test]
-    fn tilde_query_enters_file_mode() {
+    fn tilde_query_enters_folder_mode() {
         let mut launcher = launcher_with_results(3);
 
         let _ = launcher.change_query("~report".to_owned());
 
-        assert!(launcher.file_query.is_some());
+        assert!(launcher.folder_query.is_some());
         assert!(launcher.results.is_empty());
         assert_eq!(launcher.result_limit(), ui::MAX_RESULTS);
     }
 
     #[test]
-    fn a_plain_query_leaves_file_mode() {
+    fn a_plain_query_leaves_folder_mode() {
         let mut launcher = launcher_with_results(0);
 
         let _ = launcher.change_query("~report".to_owned());
         launcher
-            .files
-            .push(file_entry("C:\\Users\\me\\report.txt", false));
+            .folders
+            .push(folder_entry("C:\\Users\\me\\reports"));
 
         let _ = launcher.change_query("note".to_owned());
 
-        assert!(launcher.file_query.is_none());
-        assert!(launcher.files.is_empty());
-        assert!(launcher.file_results.is_empty());
+        assert!(launcher.folder_query.is_none());
+        assert!(launcher.folders.is_empty());
+        assert!(launcher.folder_results.is_empty());
     }
 
     #[test]
-    fn file_results_rank_and_count_toward_selection() {
+    fn folder_results_rank_and_count_toward_selection() {
         let mut launcher = launcher_with_results(0);
 
         let _ = launcher.change_query("~report".to_owned());
-        let generation = launcher.file_generation;
+        let generation = launcher.folder_generation;
 
-        let _ = launcher.update(Message::FileSearchComplete {
+        let _ = launcher.update(Message::FolderSearchComplete {
             generation,
-            files: vec![
-                file_entry("C:\\Users\\me\\old-report.txt", false),
-                file_entry("C:\\Users\\me\\notes.txt", false),
-                file_entry("C:\\Users\\me\\report.txt", false),
+            folders: vec![
+                folder_entry("C:\\Users\\me\\old-reports"),
+                folder_entry("C:\\Users\\me\\notes"),
+                folder_entry("C:\\Users\\me\\reports"),
             ],
         });
 
-        // "report.txt" (prefix match) outranks "old-report.txt" (substring).
-        assert_eq!(launcher.file_results, vec![2, 0]);
+        // "reports" (prefix match) outranks "old-reports" (substring).
+        assert_eq!(launcher.folder_results, vec![2, 0]);
         assert_eq!(launcher.selectable_count(), 2);
 
         let _ = launcher.update(Message::Ui(ui::Message::Navigate(100)));
@@ -1194,19 +1200,19 @@ mod tests {
     }
 
     #[test]
-    fn stale_file_searches_are_ignored() {
+    fn stale_folder_searches_are_ignored() {
         let mut launcher = launcher_with_results(0);
 
         let _ = launcher.change_query("~report".to_owned());
-        let stale = launcher.file_generation;
+        let stale = launcher.folder_generation;
 
         let _ = launcher.change_query("~report2".to_owned());
-        let _ = launcher.update(Message::FileSearchComplete {
+        let _ = launcher.update(Message::FolderSearchComplete {
             generation: stale,
-            files: vec![file_entry("C:\\Users\\me\\report.txt", false)],
+            folders: vec![folder_entry("C:\\Users\\me\\reports")],
         });
 
-        assert!(launcher.files.is_empty());
+        assert!(launcher.folders.is_empty());
     }
 
     #[test]
@@ -1217,11 +1223,11 @@ mod tests {
 
         assert!(
             launcher
-                .file_query
+                .folder_query
                 .as_ref()
                 .is_some_and(|query| query.is_empty())
         );
-        assert!(launcher.files.is_empty());
+        assert!(launcher.folders.is_empty());
         assert_eq!(launcher.selectable_count(), 0);
     }
 }

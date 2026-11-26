@@ -1,25 +1,24 @@
-//! Filesystem search triggered from the launcher's search field.
+//! Folder search triggered from the launcher's search field.
 //!
-//! Typing `~report` or `>report` switches the launcher from app search to file
-//! search. Both prefixes are aliases: `~` reads as "home directory" and `>`
-//! reads as "filesystem", and neither is ever part of the search term.
+//! Typing `~projects` or `>projects` switches the launcher from app search to
+//! folder search. Both prefixes are aliases: `~` reads as "home directory" and
+//! `>` reads as "filesystem", and neither is ever part of the search term.
 
 use std::path::{Path, PathBuf};
 
-/// Prefix that switches the search field into file mode.
+/// Prefix that switches the search field into folder mode.
 const PREFIXES: [char; 2] = ['~', '>'];
 
-/// A file or folder found by the filesystem search.
+/// A folder found by the filesystem search.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FileEntry {
+pub struct FolderEntry {
     path: PathBuf,
     name: String,
-    is_dir: bool,
 }
 
-impl FileEntry {
-    pub fn new(path: PathBuf, name: String, is_dir: bool) -> Self {
-        Self { path, name, is_dir }
+impl FolderEntry {
+    pub fn new(path: PathBuf, name: String) -> Self {
+        Self { path, name }
     }
 
     pub fn path(&self) -> &Path {
@@ -28,10 +27,6 @@ impl FileEntry {
 
     pub fn name(&self) -> &str {
         &self.name
-    }
-
-    pub fn is_dir(&self) -> bool {
-        self.is_dir
     }
 
     /// Short trailing part of the containing folder, for the result row.
@@ -57,12 +52,12 @@ impl FileEntry {
 
 /// A parsed `~term` / `>term` query.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct FileQuery {
+pub struct FolderQuery {
     prefix: char,
     term: String,
 }
 
-impl FileQuery {
+impl FolderQuery {
     pub fn prefix(&self) -> char {
         self.prefix
     }
@@ -76,11 +71,11 @@ impl FileQuery {
     }
 }
 
-/// Parses a file-mode query, or `None` when the field holds an app query.
+/// Parses a folder-mode query, or `None` when the field holds an app query.
 ///
 /// The prefix only counts when it is the first non-space character; `a ~ b`
 /// stays an app search.
-pub fn parse_query(input: &str) -> Option<FileQuery> {
+pub fn parse_query(input: &str) -> Option<FolderQuery> {
     let trimmed = input.trim_start();
     let mut characters = trimmed.chars();
     let prefix = characters.next()?;
@@ -89,28 +84,28 @@ pub fn parse_query(input: &str) -> Option<FileQuery> {
         return None;
     }
 
-    Some(FileQuery {
+    Some(FolderQuery {
         prefix,
         term: characters.as_str().trim().to_owned(),
     })
 }
 
-/// Orders file matches from best to worst for `term`.
+/// Orders folder matches from best to worst for `term`.
 ///
 /// An empty term keeps the order the filesystem walk produced, so `~` alone
-/// lists what the walk found first instead of showing an empty panel.
-pub fn rank(files: &[FileEntry], term: &str) -> Vec<usize> {
+/// lists nothing and shows the hint instead.
+pub fn rank(folders: &[FolderEntry], term: &str) -> Vec<usize> {
     let needle = term.trim().to_lowercase();
 
     if needle.is_empty() {
-        return (0..files.len()).collect();
+        return (0..folders.len()).collect();
     }
 
-    let mut matches: Vec<(i32, usize)> = files
+    let mut matches: Vec<(i32, usize)> = folders
         .iter()
         .enumerate()
-        .filter_map(|(index, file)| {
-            let name = file.name.to_lowercase();
+        .filter_map(|(index, folder)| {
+            let name = folder.name.to_lowercase();
             let score = if name == needle {
                 1_200
             } else if name.starts_with(&needle) {
@@ -133,23 +128,23 @@ pub fn rank(files: &[FileEntry], term: &str) -> Vec<usize> {
 mod tests {
     use super::*;
 
-    fn entry(path: &str, is_dir: bool) -> FileEntry {
+    fn entry(path: &str) -> FolderEntry {
         let path = PathBuf::from(path);
         let name = path
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
             .unwrap_or_default();
 
-        FileEntry::new(path, name, is_dir)
+        FolderEntry::new(path, name)
     }
 
     #[test]
-    fn tilde_and_angle_prefixes_switch_to_file_mode() {
-        let tilde = parse_query("~report").expect("~ is a file prefix");
+    fn tilde_and_angle_prefixes_switch_to_folder_mode() {
+        let tilde = parse_query("~projects").expect("~ is a folder prefix");
         assert_eq!(tilde.prefix(), '~');
-        assert_eq!(tilde.term(), "report");
+        assert_eq!(tilde.term(), "projects");
 
-        let angle = parse_query("> notes").expect("> is a file prefix");
+        let angle = parse_query("> notes").expect("> is a folder prefix");
         assert_eq!(angle.prefix(), '>');
         assert_eq!(angle.term(), "notes");
 
@@ -158,53 +153,50 @@ mod tests {
 
     #[test]
     fn plain_queries_stay_app_queries() {
-        assert!(parse_query("report").is_none());
+        assert!(parse_query("projects").is_none());
         assert!(parse_query("a ~ b").is_none());
         assert!(parse_query("").is_none());
         assert!(parse_query("   ").is_none());
     }
 
     #[test]
-    fn an_empty_term_is_a_valid_file_query() {
-        let query = parse_query("~").expect("a bare prefix is still file mode");
+    fn an_empty_term_is_a_valid_folder_query() {
+        let query = parse_query("~").expect("a bare prefix is still folder mode");
         assert!(query.is_empty());
     }
 
     #[test]
     fn ranking_prefers_exact_then_prefix_then_substring() {
-        let files = vec![
-            entry("C:\\Users\\me\\annual-report.pdf", false),
-            entry("C:\\Users\\me\\report.txt", false),
-            entry("C:\\Users\\me\\report", false),
+        let folders = vec![
+            entry("C:\\Users\\me\\annual-reports"),
+            entry("C:\\Users\\me\\reports"),
+            entry("C:\\Users\\me\\reports-archive"),
         ];
 
-        assert_eq!(rank(&files, "report"), vec![2, 1, 0]);
+        assert_eq!(rank(&folders, "reports"), vec![1, 2, 0]);
     }
 
     #[test]
-    fn unrelated_files_are_dropped() {
-        let files = vec![entry("C:\\Users\\me\\notes.txt", false)];
+    fn unrelated_folders_are_dropped() {
+        let folders = vec![entry("C:\\Users\\me\\notes")];
 
-        assert!(rank(&files, "zzz").is_empty());
+        assert!(rank(&folders, "zzz").is_empty());
     }
 
     #[test]
     fn empty_term_keeps_walk_order() {
-        let files = vec![
-            entry("C:\\Users\\me\\b.txt", false),
-            entry("C:\\Users\\me\\a.txt", false),
-        ];
+        let folders = vec![entry("C:\\Users\\me\\beta"), entry("C:\\Users\\me\\alpha")];
 
-        assert_eq!(rank(&files, "  "), vec![0, 1]);
+        assert_eq!(rank(&folders, "  "), vec![0, 1]);
     }
 
     #[test]
     fn parent_label_keeps_the_last_two_folders() {
-        let file = entry("C:\\Users\\me\\Documents\\Projects\\plan.md", false);
+        let folder = entry("C:\\Users\\me\\Documents\\Projects");
 
         assert_eq!(
-            file.parent_label(),
-            format!("Documents{sep}Projects", sep = std::path::MAIN_SEPARATOR)
+            folder.parent_label(),
+            format!("me{sep}Documents", sep = std::path::MAIN_SEPARATOR)
         );
     }
 }

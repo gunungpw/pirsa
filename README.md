@@ -30,9 +30,9 @@ of the way.
 - **Unit conversion** — type `1 inch` to see it converted to millimetres,
   centimetres, metres, feet, yards, miles and kilometres, or use
   `1 inch to cm` for a single target.
-- **File and folder search** — start the query with `~` or `>` to search your
-  profile instead of the Start Menu: `~report` finds `report.txt` wherever it
-  lives. Files open with their default app; folders open in Explorer.
+- **Folder search** — start the query with `~` or `>` to search the folders in
+  your profile instead of the Start Menu: `~projects` finds your project folders
+  wherever they live. Enter opens the selected folder in Explorer.
 - **Real application icons** — every row shows the app's actual Windows icon,
   read from the shell for both Start Menu shortcuts and Store apps, with a
   colored initial tile only as a fallback. Icons are cached on disk, so later
@@ -139,32 +139,31 @@ footer or with **Ctrl+Q** while it is focused.
 | --- | --- |
 | `Alt+Space` (default) | Open or hide the launcher; configurable in Settings |
 | `↑` / `↓` | Move the selection (the calculation card comes first) |
-| `Enter` | Copy the selected calculation, launch the selected app, or open the selected file |
-| `Ctrl+1` … `Ctrl+8` | Launch the nth app row (or open the nth file result) |
+| `Enter` | Copy the selected calculation, launch the selected app, or open the selected folder |
+| `Ctrl+1` … `Ctrl+8` | Launch the nth app row (or open the nth folder result) |
 | `Tab` | Open the settings window |
 | `Esc` | Hide the launcher |
 | `Ctrl+Q` | Quit Pirsa |
 | `Ctrl+,` | Open the settings window |
 | `Esc` (Settings focused) | Close the settings window |
 | `F5` | Rescan the Start Menu |
-| Click a row | Launch that app, open that file, or copy that calculation |
+| Click a row | Launch that app, open that folder, or copy that calculation |
 | Drag the app-list heading | Move the window |
 | Tray icon left-click | Open Pirsa |
 | Tray icon right-click | Open, Settings, or quit Pirsa |
 
-## File and folder search
+## Folder search
 
-Prefix the query with `~` or `>` to search the files and folders in your Windows
-profile instead of the Start Menu:
+Prefix the query with `~` or `>` to search the folders in your Windows profile
+instead of the Start Menu:
 
 ```text
-~report      files and folders whose name contains "report"
-> invoices   same search, `>` works exactly like `~`
+~projects   folders whose name contains "projects"
+> invoices  same search, `>` works exactly like `~`
 ```
 
-Results show the name, the last two folders of the path, and whether the entry
-is a **File** or a **Folder**. **Enter** (or a click) opens it with its default
-handler — folders open in Explorer.
+Results show the name and the last two folders of the path. **Enter** (or a
+click) opens the folder in Explorer.
 
 The walk is bounded: six folder levels, 20,000 entries, and a 250 ms budget per
 search, and it skips shell bookkeeping folders such as `AppData`, `node_modules`,
@@ -251,7 +250,7 @@ crates/
       lib.rs           public models and module re-exports
       model.rs         AppEntry, LaunchTarget, ScanResult, Icon, HotkeyStatus
       calc.rs          safe expression parser and length-unit conversion
-      files.rs         `~` / `>` file search: query parsing and ranking
+      folders.rs       `~` / `>` folder search: query parsing and ranking
       search.rs        fuzzy ranking with unit tests
       settings.rs      font/theme/hotkey choices and persistent settings
       usage.rs         persistent launch history
@@ -265,7 +264,7 @@ crates/
       shell.rs         dedicated shell workers for scans and icons
       tray.rs          notification-area icon and menu
       apps.rs          Start Menu and AppsFolder scanning, ShellExecute
-      files.rs         bounded profile walk behind `~` / `>`, ShellExecute open
+      folders.rs       bounded profile walk behind `~` / `>`, ShellExecute open
       icons.rs         real app icon extraction via IShellItemImageFactory
       window.rs        show/hide, focus, monitor enumeration
       window_memory.rs per-monitor placement memory (`window.txt`)
@@ -273,7 +272,7 @@ crates/
     src/lib.rs         launcher/settings views, theme colors, widget styles
 src/
   main.rs              iced daemon bootstrap
-  app.rs               launcher state, settings window, file mode, view state
+  app.rs               launcher state, settings window, folder mode, view state
 crates/core/benches/rank.rs  criterion benchmark for the search ranking
 .github/workflows/ci.yml     fmt, clippy, tests, and benchmark build
 assets/

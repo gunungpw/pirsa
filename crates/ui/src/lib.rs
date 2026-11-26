@@ -13,7 +13,7 @@ use iced::widget::{
 use iced::{Alignment, Background, Border, Color, Element, Font, Length, Theme};
 
 use pirsa_core::calc::{CalcKind, CalcResult};
-use pirsa_core::files::FileEntry;
+use pirsa_core::folders::FolderEntry;
 use pirsa_core::settings::{FontChoice, HotkeyChoice, Settings, ThemeChoice};
 use pirsa_core::{AppEntry, HotkeyStatus, LaunchTarget};
 
@@ -25,8 +25,8 @@ pub enum Message {
     Navigate(i32),
     /// Launch the app with this stable search key.
     Activate(String),
-    /// Open the file at this path.
-    ActivateFile(PathBuf),
+    /// Open the folder at this path.
+    ActivateFolder(PathBuf),
     CopyCalc,
     OpenSettings,
     Quit,
@@ -56,11 +56,11 @@ pub struct ViewState<'a> {
     pub calc: Option<&'a CalcResult>,
     /// Real icons keyed by [`AppEntry::search_key`].
     pub icons: &'a HashMap<String, Handle>,
-    /// File-mode matches, their ranking, and the typed term (`Some` while the
+    /// Folder-mode matches, their ranking, and the typed term (`Some` while the
     /// field holds a `~` / `>` query).
-    pub files: &'a [FileEntry],
-    pub file_results: &'a [usize],
-    pub file_term: Option<&'a str>,
+    pub folders: &'a [FolderEntry],
+    pub folder_results: &'a [usize],
+    pub folder_term: Option<&'a str>,
     pub query: &'a str,
     pub selected: usize,
     pub hotkey: HotkeyStatus,
@@ -76,9 +76,9 @@ pub struct ViewState<'a> {
 }
 
 impl ViewState<'_> {
-    /// Whether the search field currently holds a `~` / `>` file query.
-    pub fn is_file_mode(&self) -> bool {
-        self.file_term.is_some()
+    /// Whether the search field currently holds a `~` / `>` folder query.
+    pub fn is_folder_mode(&self) -> bool {
+        self.folder_term.is_some()
     }
 }
 
@@ -241,8 +241,8 @@ pub fn view<'a>(app: ViewState<'a>) -> Element<'a, Message> {
 }
 
 fn search_row<'a>(app: ViewState<'a>, colors: Colors, font: Font) -> Element<'a, Message> {
-    let placeholder = if app.is_file_mode() {
-        "Search files and folders in your profile…"
+    let placeholder = if app.is_folder_mode() {
+        "Search folders in your profile…"
     } else {
         "Search apps, calculate, convert…"
     };
@@ -345,10 +345,10 @@ fn calc_card<'a>(
 
 fn section_label<'a>(app: ViewState<'a>, colors: Colors, font: Font) -> Element<'a, Message> {
     let query_empty = app.query.trim().is_empty();
-    let indexing = !app.is_file_mode() && app.indexing && app.apps.is_empty();
+    let indexing = !app.is_folder_mode() && app.indexing && app.apps.is_empty();
 
-    let title = if app.is_file_mode() {
-        "Files"
+    let title = if app.is_folder_mode() {
+        "Folders"
     } else if indexing {
         "Indexing"
     } else if query_empty {
@@ -357,11 +357,11 @@ fn section_label<'a>(app: ViewState<'a>, colors: Colors, font: Font) -> Element<
         "Results"
     };
 
-    let count = if app.is_file_mode() {
-        if app.file_term.is_some_and(|term| term.trim().is_empty()) {
+    let count = if app.is_folder_mode() {
+        if app.folder_term.is_some_and(|term| term.trim().is_empty()) {
             "TYPE TO SEARCH".to_owned()
         } else {
-            format!("{} FOUND", app.file_results.len())
+            format!("{} FOUND", app.folder_results.len())
         }
     } else if indexing {
         "SCANNING…".to_owned()
@@ -373,7 +373,7 @@ fn section_label<'a>(app: ViewState<'a>, colors: Colors, font: Font) -> Element<
 
     let mut details = row![Space::new().width(Length::Fill)].align_y(Alignment::Center);
 
-    if app.warning.is_some() && !app.is_file_mode() {
+    if app.warning.is_some() && !app.is_folder_mode() {
         details = details.push(
             text("PARTIAL INDEX")
                 .size(9)
@@ -405,8 +405,8 @@ fn result_list<'a>(app: ViewState<'a>, colors: Colors, font: Font) -> Element<'a
     let limit = app.result_limit;
     let height = limit as f32 * ROW_HEIGHT + (limit.saturating_sub(1)) as f32 * ROW_GAP;
 
-    let content: Element<'_, Message> = if app.is_file_mode() {
-        file_list(app, colors, font)
+    let content: Element<'_, Message> = if app.is_folder_mode() {
+        folder_list(app, colors, font)
     } else if app.results.is_empty() {
         if app.calc.is_some() {
             Space::new().into()
@@ -432,19 +432,19 @@ fn result_list<'a>(app: ViewState<'a>, colors: Colors, font: Font) -> Element<'a
         .into()
 }
 
-fn file_list<'a>(app: ViewState<'a>, colors: Colors, font: Font) -> Element<'a, Message> {
-    if app.file_term.is_some_and(|term| term.trim().is_empty()) {
+fn folder_list<'a>(app: ViewState<'a>, colors: Colors, font: Font) -> Element<'a, Message> {
+    if app.folder_term.is_some_and(|term| term.trim().is_empty()) {
         return notice(
-            "Search your files",
-            "Type a name after ~ or > to search files and folders in your profile.",
+            "Search your folders",
+            "Type a name after ~ or > to search folders in your profile.",
             colors,
             font,
         );
     }
 
-    if app.file_results.is_empty() {
+    if app.folder_results.is_empty() {
         return notice(
-            "No files match",
+            "No folders match",
             "Try a different name, or press Esc to close.",
             colors,
             font,
@@ -452,23 +452,23 @@ fn file_list<'a>(app: ViewState<'a>, colors: Colors, font: Font) -> Element<'a, 
     }
 
     let rows: Vec<Element<'a, Message>> = app
-        .file_results
+        .folder_results
         .iter()
         .take(app.result_limit)
         .enumerate()
         .filter_map(|(position, index)| {
-            app.files
+            app.folders
                 .get(*index)
-                .map(|file| file_row(app, file, position, colors, font))
+                .map(|folder| folder_row(app, folder, position, colors, font))
         })
         .collect();
 
     column(rows).spacing(ROW_GAP).into()
 }
 
-fn file_row<'a>(
+fn folder_row<'a>(
     app: ViewState<'a>,
-    file: &'a FileEntry,
+    folder: &'a FolderEntry,
     position: usize,
     colors: Colors,
     font: Font,
@@ -476,14 +476,14 @@ fn file_row<'a>(
     let selected = position == app.selected;
 
     let content = row![
-        icon_tile(file.name(), colors, font),
+        icon_tile(folder.name(), colors, font),
         row![
-            text(file.name())
+            text(folder.name())
                 .size(15)
                 .font(semibold_font(app.app_name_font))
                 .color(colors.text)
                 .wrapping(Wrapping::None),
-            text(file.parent_label())
+            text(folder.parent_label())
                 .size(11)
                 .font(app.category_font)
                 .color(colors.dim)
@@ -492,12 +492,11 @@ fn file_row<'a>(
         .spacing(9)
         .align_y(Alignment::End)
         .width(Length::Fill),
-        container(
-            text(if file.is_dir() { "Folder" } else { "File" })
-                .size(11)
-                .font(font)
-                .color(if selected { colors.muted } else { colors.dim })
-        )
+        container(text("Folder").size(11).font(font).color(if selected {
+            colors.muted
+        } else {
+            colors.dim
+        }))
         .width(72)
         .align_x(Alignment::End),
     ]
@@ -507,7 +506,7 @@ fn file_row<'a>(
     .spacing(12);
 
     button(content)
-        .on_press(Message::ActivateFile(file.path().to_path_buf()))
+        .on_press(Message::ActivateFolder(folder.path().to_path_buf()))
         .width(Length::Fill)
         .height(ROW_HEIGHT)
         .padding([0, 12])
@@ -1154,9 +1153,9 @@ mod tests {
             results,
             calc: None,
             icons,
-            files: &[],
-            file_results: &[],
-            file_term: None,
+            folders: &[],
+            folder_results: &[],
+            folder_term: None,
             query: "",
             selected: 0,
             hotkey: HotkeyStatus::Ready,
@@ -1228,52 +1227,51 @@ mod tests {
     }
 
     #[test]
-    fn file_rows_are_clickable_headlessly() {
+    fn folder_rows_are_clickable_headlessly() {
         let apps = [];
         let results = [];
         let icons = HashMap::new();
         let theme = Theme::Dark;
-        let files = [FileEntry::new(
-            PathBuf::from("C:\\Users\\me\\Documents\\report.txt"),
-            "report.txt".to_owned(),
-            false,
+        let folders = [FolderEntry::new(
+            PathBuf::from("C:\\Users\\me\\Documents\\reports"),
+            "reports".to_owned(),
         )];
-        let file_results = [0];
+        let folder_results = [0];
 
         let mut state = app_state(&apps, &results, &icons, &theme);
-        state.files = &files;
-        state.file_results = &file_results;
-        state.file_term = Some("report");
+        state.folders = &folders;
+        state.folder_results = &folder_results;
+        state.folder_term = Some("report");
 
         let mut ui = iced_tester::test::simulator(view(state));
 
-        assert!(ui.find("report.txt").is_ok());
-        ui.click("report.txt")
-            .expect("a file row should be clickable");
+        assert!(ui.find("reports").is_ok());
+        ui.click("reports")
+            .expect("a folder row should be clickable");
 
         let messages: Vec<Message> = ui.into_messages().collect();
         assert!(
             messages.iter().any(|message| matches!(
                 message,
-                Message::ActivateFile(path) if path.ends_with("report.txt")
+                Message::ActivateFolder(path) if path.ends_with("reports")
             )),
-            "clicking a file row should emit ActivateFile for that path"
+            "clicking a folder row should emit ActivateFolder for that path"
         );
     }
 
     #[test]
-    fn an_empty_file_term_shows_the_hint() {
+    fn an_empty_folder_term_shows_the_hint() {
         let apps = [];
         let results = [];
         let icons = HashMap::new();
         let theme = Theme::Dark;
 
         let mut state = app_state(&apps, &results, &icons, &theme);
-        state.file_term = Some("");
+        state.folder_term = Some("");
 
         let mut ui = iced_tester::test::simulator(view(state));
 
-        assert!(ui.find("Search your files").is_ok());
+        assert!(ui.find("Search your folders").is_ok());
     }
 
     #[test]
