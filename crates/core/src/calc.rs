@@ -82,9 +82,22 @@ fn evaluate_math(input: &str) -> Option<f64> {
     Some(value)
 }
 
+/// Maximum nesting the expression parser accepts.
+///
+/// Every level costs several stack frames (`expression` → `additive` →
+/// `multiplicative` → `unary` → `power` → `primary` → …), so an unbounded
+/// recursion lets a pasted query such as thousands of nested parentheses
+/// overflow the stack. That aborts the whole process rather than unwinding,
+/// because release builds set `panic = "abort"`. The cap leaves room for any
+/// expression a person would write while keeping the worst case far below the
+/// smallest supported stack.
+const MAX_NESTING_DEPTH: usize = 128;
+
 struct Parser {
     characters: Vec<char>,
     pos: usize,
+    /// Current recursion depth, bounded by [`MAX_NESTING_DEPTH`].
+    depth: usize,
 }
 
 impl Parser {
@@ -92,7 +105,24 @@ impl Parser {
         Self {
             characters: input.chars().collect(),
             pos: 0,
+            depth: 0,
         }
+    }
+
+    /// Counts one level of recursion, refusing to go past the cap.
+    fn enter(&mut self) -> Option<()> {
+        if self.depth >= MAX_NESTING_DEPTH {
+            return None;
+        }
+
+        self.depth += 1;
+        Some(())
+    }
+
+    /// Balances [`Self::enter`] once a nested parse has finished, successfully
+    /// or not.
+    fn leave(&mut self) {
+        self.depth = self.depth.saturating_sub(1);
     }
 
     fn peek(&self) -> Option<char> {
@@ -114,7 +144,10 @@ impl Parser {
     }
 
     fn parse_expression(&mut self) -> Option<f64> {
-        self.parse_additive()
+        self.enter()?;
+        let value = self.parse_additive();
+        self.leave();
+        value
     }
 
     fn parse_additive(&mut self) -> Option<f64> {
@@ -168,6 +201,15 @@ impl Parser {
     }
 
     fn parse_unary(&mut self) -> Option<f64> {
+        // Unary chains (`---1`) and exponent towers (`2^2^2^…`) recurse without
+        // passing through `parse_expression`, so they need the same cap.
+        self.enter()?;
+        let value = self.parse_unary_inner();
+        self.leave();
+        value
+    }
+
+    fn parse_unary_inner(&mut self) -> Option<f64> {
         self.skip_whitespace();
 
         match self.peek() {
@@ -603,6 +645,50 @@ mod tests {
         assert!(evaluate("2 / 0").is_none());
         assert!(evaluate("sqrt(-1)").is_none());
         assert!(evaluate("abc").is_none());
+    }
+
+    #[test]
+    fn ordinary_nesting_is_still_accepted() {
+        let depth = 20;
+        let nested = format!("{}1{}", "(".repeat(depth), ")".repeat(depth));
+
+        assert_eq!(math(&nested), "1");
+        assert_eq!(math(&format!("{}5", "-".repeat(10))), "5");
+        assert_eq!(
+            math(&format!("{}1{}", "sqrt(".repeat(4), ")".repeat(4))),
+            "1"
+        );
+    }
+
+    #[test]
+    fn rejects_runaway_parenthesis_nesting() {
+        let depth = MAX_NESTING_DEPTH * 8;
+        let nested = format!("{}1{}", "(".repeat(depth), ")".repeat(depth));
+
+        // Used to overflow the stack; the process aborts instead of unwinding.
+        assert!(evaluate(&nested).is_none());
+    }
+
+    #[test]
+    fn rejects_runaway_function_nesting() {
+        let depth = MAX_NESTING_DEPTH * 8;
+        let nested = format!("{}1{}", "abs(".repeat(depth), ")".repeat(depth));
+
+        assert!(evaluate(&nested).is_none());
+    }
+
+    #[test]
+    fn rejects_runaway_unary_chains() {
+        let chained = format!("{}1", "-".repeat(MAX_NESTING_DEPTH * 8));
+
+        assert!(evaluate(&chained).is_none());
+    }
+
+    #[test]
+    fn rejects_runaway_exponent_towers() {
+        let tower = format!("{}2", "2^".repeat(MAX_NESTING_DEPTH * 8));
+
+        assert!(evaluate(&tower).is_none());
     }
 
     #[test]

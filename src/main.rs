@@ -17,12 +17,12 @@ fn main() -> iced::Result {
         util::log(format!("panic: {info}"));
     }));
 
-    let hotkey = platform::init();
+    let settings = Settings::load();
+    let hotkey = platform::init(settings.hotkey);
     let show_on_start =
         std::env::args().any(|argument| argument == "--show") || !hotkey.available();
     platform::set_start_visible(show_on_start);
 
-    let settings = Settings::load();
     let default_font = Font::with_name(settings.font.name());
     let boot_settings = settings.clone();
 

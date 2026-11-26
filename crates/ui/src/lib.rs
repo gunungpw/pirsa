@@ -11,7 +11,7 @@ use iced::widget::{
 use iced::{Alignment, Background, Border, Color, Element, Font, Length, Theme};
 
 use pirsa_core::calc::{CalcKind, CalcResult};
-use pirsa_core::settings::{FontChoice, Settings, ThemeChoice};
+use pirsa_core::settings::{FontChoice, HotkeyChoice, Settings, ThemeChoice};
 use pirsa_core::{AppEntry, HotkeyStatus, LaunchTarget};
 
 /// UI-originated actions.
@@ -34,6 +34,7 @@ pub enum SettingsMessage {
     AppNameFontChanged(FontChoice),
     CategoryFontChanged(FontChoice),
     ThemeChanged(ThemeChoice),
+    HotkeyChanged(HotkeyChoice),
     Close,
 }
 
@@ -46,6 +47,7 @@ pub trait ViewModel {
     fn query(&self) -> &str;
     fn selected(&self) -> usize;
     fn hotkey(&self) -> HotkeyStatus;
+    fn hotkey_choice(&self) -> HotkeyChoice;
     fn error(&self) -> Option<&str>;
     fn warning(&self) -> Option<&str>;
     fn indexing(&self) -> bool;
@@ -59,7 +61,7 @@ pub trait ViewModel {
 pub const WINDOW_WIDTH: f32 = 820.0;
 pub const WINDOW_HEIGHT: f32 = 540.0;
 pub const SETTINGS_WINDOW_WIDTH: f32 = 620.0;
-pub const SETTINGS_WINDOW_HEIGHT: f32 = 600.0;
+pub const SETTINGS_WINDOW_HEIGHT: f32 = 680.0;
 pub const INPUT_ID: &str = "pirsa-search-input";
 
 pub const MAX_RESULTS: usize = 8;
@@ -507,9 +509,15 @@ fn footer(app: &impl ViewModel, colors: Colors, font: Font) -> Element<'_, Messa
     }
 
     let (color, label) = match app.hotkey() {
-        HotkeyStatus::Ready => (colors.success, "Alt+Space"),
-        HotkeyStatus::Unavailable => (colors.danger, "Alt+Space unavailable"),
-        HotkeyStatus::Pending => (colors.dim, "Starting…"),
+        HotkeyStatus::Ready => (
+            colors.success,
+            std::borrow::Cow::Borrowed(app.hotkey_choice().label()),
+        ),
+        HotkeyStatus::Unavailable => (
+            colors.danger,
+            std::borrow::Cow::Owned(format!("{} unavailable", app.hotkey_choice().label())),
+        ),
+        HotkeyStatus::Pending => (colors.dim, std::borrow::Cow::Borrowed("Starting…")),
     };
 
     let primary_action = if app.calc().is_some() && app.selected() == 0 {
@@ -632,7 +640,11 @@ fn entry_kind(entry: &AppEntry) -> &'static str {
     }
 }
 
-pub fn settings_view<'a>(settings: &'a Settings, theme: &'a Theme) -> Element<'a, SettingsMessage> {
+pub fn settings_view<'a>(
+    settings: &'a Settings,
+    theme: &'a Theme,
+    notice: Option<&'a str>,
+) -> Element<'a, SettingsMessage> {
     let colors = Colors::from_theme(theme);
     let font = Font::with_name(settings.font.name());
     let app_name_font = Font::with_name(settings.app_name_font.name());
@@ -682,6 +694,26 @@ pub fn settings_view<'a>(settings: &'a Settings, theme: &'a Theme) -> Element<'a
     .width(Length::Fill)
     .style(pick_list_style);
 
+    let hotkey_picker = pick_list(
+        HotkeyChoice::ALL,
+        Some(settings.hotkey),
+        SettingsMessage::HotkeyChanged,
+    )
+    .text_size(14)
+    .padding([8, 10])
+    .font(font)
+    .width(Length::Fill)
+    .style(pick_list_style);
+
+    let notice: Element<'a, SettingsMessage> = match notice {
+        Some(notice) => column![
+            Space::new().height(8),
+            text(notice).size(11).font(font).color(colors.danger),
+        ]
+        .into(),
+        None => Space::new().height(0).into(),
+    };
+
     let preview = container(
         row![
             text("Terminal")
@@ -715,7 +747,7 @@ pub fn settings_view<'a>(settings: &'a Settings, theme: &'a Theme) -> Element<'a
             .size(24)
             .font(bold_font(font))
             .color(colors.text),
-        text("Appearance changes apply immediately.")
+        text("Changes apply immediately.")
             .size(11)
             .font(font)
             .color(colors.dim),
@@ -727,6 +759,9 @@ pub fn settings_view<'a>(settings: &'a Settings, theme: &'a Theme) -> Element<'a
         settings_field("Category font", category_font_picker.into(), colors, font),
         Space::new().height(12),
         settings_field("Theme", theme_picker.into(), colors, font),
+        Space::new().height(12),
+        settings_field("Global hotkey", hotkey_picker.into(), colors, font),
+        notice,
         Space::new().height(16),
         text("Preview").size(11).font(font).color(colors.dim),
         Space::new().height(6),
@@ -921,6 +956,7 @@ mod tests {
         query: String,
         selected: usize,
         hotkey: HotkeyStatus,
+        hotkey_choice: HotkeyChoice,
         error: Option<String>,
         warning: Option<String>,
         indexing: bool,
@@ -944,6 +980,7 @@ mod tests {
                 query: String::new(),
                 selected: 0,
                 hotkey: HotkeyStatus::Ready,
+                hotkey_choice: HotkeyChoice::AltSpace,
                 error: None,
                 warning: None,
                 indexing: false,
@@ -980,6 +1017,10 @@ mod tests {
 
         fn hotkey(&self) -> HotkeyStatus {
             self.hotkey
+        }
+
+        fn hotkey_choice(&self) -> HotkeyChoice {
+            self.hotkey_choice
         }
 
         fn error(&self) -> Option<&str> {
@@ -1054,12 +1095,13 @@ mod tests {
     fn settings_view_builds_and_closes_headlessly() {
         let settings = Settings::default();
         let theme = Theme::Dark;
-        let mut ui = iced_tester::test::simulator(settings_view(&settings, &theme));
+        let mut ui = iced_tester::test::simulator(settings_view(&settings, &theme, None));
 
         assert!(ui.find("UI font").is_ok());
         assert!(ui.find("App name font").is_ok());
         assert!(ui.find("Category font").is_ok());
         assert!(ui.find("Theme").is_ok());
+        assert!(ui.find("Global hotkey").is_ok());
         ui.click("Close").expect("Close button should be clickable");
 
         let messages: Vec<SettingsMessage> = ui.into_messages().collect();
@@ -1069,5 +1111,15 @@ mod tests {
                 .any(|message| matches!(message, SettingsMessage::Close)),
             "clicking Close should emit SettingsMessage::Close"
         );
+    }
+
+    #[test]
+    fn settings_view_shows_hotkey_notice_headlessly() {
+        let settings = Settings::default();
+        let theme = Theme::Dark;
+        let notice = "Ctrl+Space is already in use; select another hotkey.";
+        let mut ui = iced_tester::test::simulator(settings_view(&settings, &theme, Some(notice)));
+
+        assert!(ui.find(notice).is_ok());
     }
 }

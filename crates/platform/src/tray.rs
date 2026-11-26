@@ -1,14 +1,16 @@
 //! Notification-area (system tray) icon and menu.
 
 use std::mem::size_of;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicIsize, AtomicU32, Ordering};
+use std::sync::{Mutex, MutexGuard};
 use std::thread;
 
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, WPARAM};
 use windows::Win32::Graphics::Gdi::HBRUSH;
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::Shell::{
-    NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NOTIFYICONDATAW, Shell_NotifyIconW,
+    NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_DELETE, NIM_MODIFY, NOTIFYICONDATAW,
+    Shell_NotifyIconW,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AppendMenuW, CreatePopupMenu, CreateWindowExW, DefWindowProcW, DestroyMenu, DispatchMessageW,
@@ -31,9 +33,42 @@ const CLASS_NAME: PCWSTR = w!("PirsaTrayWindow");
 const MENU_OPEN: usize = 1;
 const MENU_SETTINGS: usize = 2;
 const MENU_QUIT: usize = 3;
-const TOOLTIP: &str = "Pirsa — Alt+Space";
+const DEFAULT_TOOLTIP: &str = "Pirsa — Alt+Space";
 
 static TASKBAR_CREATED: AtomicU32 = AtomicU32::new(0);
+static TRAY_HWND: AtomicIsize = AtomicIsize::new(0);
+static TRAY_TOOLTIP: Mutex<String> = Mutex::new(String::new());
+
+/// Updates the tray tooltip, for example after the hotkey changes.
+pub fn set_tooltip(tooltip: &str) {
+    *tooltip_text() = tooltip.to_owned();
+
+    let raw = TRAY_HWND.load(Ordering::Relaxed);
+
+    if raw == 0 {
+        return;
+    }
+
+    let mut data = NOTIFYICONDATAW {
+        cbSize: size_of::<NOTIFYICONDATAW>() as u32,
+        hWnd: HWND(raw as *mut core::ffi::c_void),
+        uID: TRAY_ID,
+        uFlags: NIF_TIP,
+        ..Default::default()
+    };
+
+    copy_text(&mut data.szTip, tooltip);
+
+    if !unsafe { Shell_NotifyIconW(NIM_MODIFY, &data) }.as_bool() {
+        log("tray could not update its tooltip");
+    }
+}
+
+fn tooltip_text() -> MutexGuard<'static, String> {
+    TRAY_TOOLTIP
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+}
 
 /// Starts the tray thread. Safe to call once during startup.
 pub fn start() {
@@ -98,6 +133,7 @@ fn run() {
 
     let taskbar_created = unsafe { RegisterWindowMessageW(w!("TaskbarCreated")) };
     TASKBAR_CREATED.store(taskbar_created, Ordering::Relaxed);
+    TRAY_HWND.store(hwnd.0 as isize, Ordering::Relaxed);
 
     add_icon(hwnd, instance);
     log("tray window created");
@@ -118,6 +154,7 @@ fn run() {
     }
 
     remove_icon(hwnd);
+    TRAY_HWND.store(0, Ordering::Relaxed);
     log("tray icon stopped");
 }
 
@@ -205,7 +242,14 @@ fn add_icon(hwnd: HWND, instance: HINSTANCE) {
         ..Default::default()
     };
 
-    copy_text(&mut data.szTip, TOOLTIP);
+    let tooltip = tooltip_text().clone();
+    let tooltip = if tooltip.is_empty() {
+        DEFAULT_TOOLTIP
+    } else {
+        tooltip.as_str()
+    };
+
+    copy_text(&mut data.szTip, tooltip);
 
     if !unsafe { Shell_NotifyIconW(NIM_ADD, &data) }.as_bool() {
         log("tray could not add its notification icon");

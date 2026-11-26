@@ -8,13 +8,15 @@ Repository: [github.com/gunungpw/pirsa](https://github.com/gunungpw/pirsa)
 
 ![Pirsa](docs/screenshot.png)
 
-Press **Alt+Space** anywhere to open it, type a few letters, press **Enter**.
-Pirsa searches the Start Menu (including Store/UWP apps) and gets out of the way.
+Press **Alt+Space** (the default) anywhere to open it, type a few letters, press
+**Enter**. Pirsa searches the Start Menu (including Store/UWP apps) and gets out
+of the way.
 
 ## Features
 
-- **Alt+Space from anywhere** — the app lives in the background with no taskbar
-  button.
+- **Open from anywhere** — the app lives in the background with no taskbar
+  button. The global hotkey defaults to **Alt+Space** and can be changed in
+  Settings.
 - **Start Menu search** — indexes both per-user and all-user Start Menu
   shortcuts, plus the Windows `AppsFolder` namespace used by Store/UWP apps such
   as Settings and Calculator.
@@ -38,9 +40,9 @@ Pirsa searches the Start Menu (including Store/UWP apps) and gets out of the way
   **Settings**, and **Quit**. The icon is restored automatically if Explorer
   restarts.
 - **Settings window** — change UI, app-name, and category fonts independently,
-  and choose Light, Dark, Nord, Dracula, Gruvbox, Catppuccin, Tokyo Night, or
-  Solarized themes. Changes apply immediately and persist in
-  `%LOCALAPPDATA%\Pirsa\settings.txt`.
+  choose Light, Dark, Nord, Dracula, Gruvbox, Catppuccin, Tokyo Night, or
+  Solarized themes, and pick the global hotkey. Changes apply immediately and
+  persist in `%LOCALAPPDATA%\Pirsa\settings.txt`.
 - **Focus-aware** — hiding returns focus to the window you came from; clicking
   elsewhere auto-hides the launcher.
 - **Native and small** — one executable, no WebView, no runtime dependencies.
@@ -90,7 +92,7 @@ cargo run -- --show
 ```
 
 `--show` starts with the window visible. Without it, Pirsa starts hidden and waits
-for Alt+Space.
+for the configured global hotkey (Alt+Space by default).
 
 ### Testing
 
@@ -129,7 +131,7 @@ footer or with **Ctrl+Q** while it is focused.
 
 | Key / action | Result |
 | --- | --- |
-| `Alt+Space` | Open or hide the launcher |
+| `Alt+Space` (default) | Open or hide the launcher; configurable in Settings |
 | `↑` / `↓` | Move the selection (the calculation card comes first) |
 | `Enter` | Copy the selected calculation, or launch the selected app |
 | `Esc` | Hide the launcher |
@@ -170,6 +172,10 @@ or the tray menu. You can change:
   names.
 - **Theme** — Light, Dark (Pirsa's original dark palette), Nord, Dracula, Gruvbox
   Dark/Light, Catppuccin Mocha/Latte, Tokyo Night/Light, or Solarized Light.
+- **Global hotkey** — Alt+Space (default), Ctrl+Space, Ctrl+Alt+Space,
+  Alt+Shift+Space, Ctrl+Shift+Space, Alt+`, Ctrl+`, Alt+Q, Ctrl+Alt+Q, or
+  Ctrl+Alt+P. The new hotkey is registered immediately. If Windows rejects it
+  because another app already owns it, the previous hotkey stays active.
 
 There is deliberately **no “follow system”** theme option. Changes apply to both
 windows immediately and are saved to
@@ -190,15 +196,16 @@ apps are launched through their shortcut or executable path.
 On a typical development machine this indexes 140+ apps in well under a second.
 The full scan is synchronous at boot; **F5** refreshes it.
 
-## Why Alt+Space instead of Win+Space?
+## Why Alt+Space by default?
 
 Windows reserves **Win+Space** for switching keyboard layouts. `RegisterHotKey`
 rejects it with error 1409, and intercepting it with a low-level keyboard hook
 fights the shell (Start menu, language switcher, and stuck Win-key state are all
-easy to trigger). Pirsa therefore uses the reliable, standard **Alt+Space**
-global hotkey.
+easy to trigger). Pirsa therefore defaults to the reliable, standard
+**Alt+Space** global hotkey. Other Alt/Ctrl combinations are available in
+Settings.
 
-While Pirsa is running, Alt+Space is reserved for the launcher instead of the
+While Pirsa is using Alt+Space, it is reserved for the launcher instead of the
 active window's system menu.
 
 ## Project layout
@@ -211,14 +218,14 @@ crates/
       model.rs         AppEntry, LaunchTarget, ScanResult, Icon, HotkeyStatus
       calc.rs          safe expression parser and length-unit conversion
       search.rs        fuzzy ranking with unit tests
-      settings.rs      font/theme choices and persistent settings
+      settings.rs      font/theme/hotkey choices and persistent settings
       usage.rs         persistent launch history
       util.rs          normalization, SearchText, logging
   platform/            Windows-specific integration (no iced)
     src/
       lib.rs           startup, shared request flags, platform re-exports
       com.rs           RAII STA COM apartment guard
-      hotkey.rs        Alt+Space via RegisterHotKey
+      hotkey.rs        global hotkey via RegisterHotKey, changeable at runtime
       instance.rs      named mutex + named show/quit events
       shell.rs         dedicated shell workers for scans and icons
       tray.rs          notification-area icon and menu

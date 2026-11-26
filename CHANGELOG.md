@@ -5,6 +5,23 @@ All notable changes to Pirsa are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.8.0] - 2026-11-26
+
+### Added
+
+- Global hotkey setting. The settings window offers Alt+Space (default),
+  Ctrl+Space, Ctrl+Alt+Space, Alt+Shift+Space, Ctrl+Shift+Space, Alt+`,
+  Ctrl+`, Alt+Q, Ctrl+Alt+Q, and Ctrl+Alt+P. The binding is re-registered
+  immediately; if Windows rejects it, the previous hotkey stays active.
+- The footer and tray tooltip show the selected hotkey.
+
+### Fixed
+
+- Deeply nested expressions no longer overflow the calculator's parser stack.
+  The recursive-descent parser now caps nesting depth, so a pasted query such
+  as thousands of nested parentheses is rejected instead of aborting the
+  launcher.
+
 ## [0.7.0] - 2026-11-26
 
 ### Added

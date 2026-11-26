@@ -7,6 +7,7 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use pirsa_core::HotkeyStatus;
+use pirsa_core::settings::HotkeyChoice;
 use tokio::sync::Notify;
 
 mod apps;
@@ -41,7 +42,7 @@ pub struct Requests {
 /// Must be called once, before the iced application is created.
 ///
 /// If another launcher is already running, this notifies it and exits.
-pub fn init() -> HotkeyStatus {
+pub fn init(choice: HotkeyChoice) -> HotkeyStatus {
     if !instance::claim() {
         instance::signal_existing();
         std::process::exit(0);
@@ -54,9 +55,21 @@ pub fn init() -> HotkeyStatus {
     instance::watch(show, "show", request_show);
     instance::watch(quit, "quit", request_quit);
 
-    let status = hotkey::start();
+    let status = hotkey::start(choice);
+    tray::set_tooltip(&format!("Pirsa — {}", choice.label()));
 
-    pirsa_core::util::log(format!("started (hotkey: {status:?}, Alt+Space)"));
+    pirsa_core::util::log(format!("started (hotkey: {status:?}, {})", choice.label()));
+
+    status
+}
+
+/// Changes the system-wide hotkey and keeps the tray tooltip in sync.
+pub fn set_hotkey(choice: HotkeyChoice) -> HotkeyStatus {
+    let status = hotkey::set(choice);
+
+    if status.available() {
+        tray::set_tooltip(&format!("Pirsa — {}", choice.label()));
+    }
 
     status
 }

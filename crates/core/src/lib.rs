@@ -13,5 +13,5 @@ pub mod util;
 
 pub use calc::{CalcKind, CalcResult};
 pub use model::{AppEntry, HotkeyStatus, Icon, LaunchTarget, ScanResult};
-pub use settings::{FontChoice, Settings, ThemeChoice};
+pub use settings::{FontChoice, HotkeyChoice, Settings, ThemeChoice};
 pub use usage::Usage;

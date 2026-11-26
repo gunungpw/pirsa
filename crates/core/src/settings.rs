@@ -177,6 +177,85 @@ impl fmt::Display for ThemeChoice {
     }
 }
 
+/// A system-wide hotkey offered by the settings window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HotkeyChoice {
+    AltSpace,
+    CtrlSpace,
+    CtrlAltSpace,
+    AltShiftSpace,
+    CtrlShiftSpace,
+    AltBacktick,
+    CtrlBacktick,
+    AltQ,
+    CtrlAltQ,
+    CtrlAltP,
+}
+
+impl HotkeyChoice {
+    pub const ALL: &'static [Self] = &[
+        Self::AltSpace,
+        Self::CtrlSpace,
+        Self::CtrlAltSpace,
+        Self::AltShiftSpace,
+        Self::CtrlShiftSpace,
+        Self::AltBacktick,
+        Self::CtrlBacktick,
+        Self::AltQ,
+        Self::CtrlAltQ,
+        Self::CtrlAltP,
+    ];
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::AltSpace => "Alt+Space",
+            Self::CtrlSpace => "Ctrl+Space",
+            Self::CtrlAltSpace => "Ctrl+Alt+Space",
+            Self::AltShiftSpace => "Alt+Shift+Space",
+            Self::CtrlShiftSpace => "Ctrl+Shift+Space",
+            Self::AltBacktick => "Alt+`",
+            Self::CtrlBacktick => "Ctrl+`",
+            Self::AltQ => "Alt+Q",
+            Self::CtrlAltQ => "Ctrl+Alt+Q",
+            Self::CtrlAltP => "Ctrl+Alt+P",
+        }
+    }
+
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::AltSpace => "alt-space",
+            Self::CtrlSpace => "ctrl-space",
+            Self::CtrlAltSpace => "ctrl-alt-space",
+            Self::AltShiftSpace => "alt-shift-space",
+            Self::CtrlShiftSpace => "ctrl-shift-space",
+            Self::AltBacktick => "alt-backtick",
+            Self::CtrlBacktick => "ctrl-backtick",
+            Self::AltQ => "alt-q",
+            Self::CtrlAltQ => "ctrl-alt-q",
+            Self::CtrlAltP => "ctrl-alt-p",
+        }
+    }
+
+    fn from_key(value: &str) -> Option<Self> {
+        let normalized = value
+            .trim()
+            .to_ascii_lowercase()
+            .replace('`', "backtick")
+            .replace([' ', '+', '-'], "");
+
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|choice| choice.key().replace([' ', '+', '-'], "") == normalized)
+    }
+}
+
+impl fmt::Display for HotkeyChoice {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.label())
+    }
+}
+
 /// User appearance settings.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Settings {
@@ -187,6 +266,8 @@ pub struct Settings {
     /// Font used for the app category/detail text.
     pub category_font: FontChoice,
     pub theme: ThemeChoice,
+    /// The system-wide hotkey that opens the launcher.
+    pub hotkey: HotkeyChoice,
 }
 
 impl Default for Settings {
@@ -196,6 +277,7 @@ impl Default for Settings {
             app_name_font: FontChoice::SegoeUi,
             category_font: FontChoice::SegoeUi,
             theme: ThemeChoice::Dark,
+            hotkey: HotkeyChoice::AltSpace,
         }
     }
 }
@@ -248,6 +330,11 @@ impl Settings {
                         settings.theme = theme;
                     }
                 }
+                "hotkey" => {
+                    if let Some(hotkey) = HotkeyChoice::from_key(value) {
+                        settings.hotkey = hotkey;
+                    }
+                }
                 _ => {}
             }
         }
@@ -267,11 +354,12 @@ impl Settings {
     /// Persists settings to an explicit path, replacing it atomically.
     pub fn save_to(&self, path: &Path) {
         let body = format!(
-            "font={}\napp-name-font={}\ncategory-font={}\ntheme={}\n",
+            "font={}\napp-name-font={}\ncategory-font={}\ntheme={}\nhotkey={}\n",
             self.font.key(),
             self.app_name_font.key(),
             self.category_font.key(),
-            self.theme.key()
+            self.theme.key(),
+            self.hotkey.key()
         );
 
         if let Some(parent) = path.parent() {
@@ -313,6 +401,7 @@ mod tests {
 
         assert_eq!(settings.font, FontChoice::SegoeUi);
         assert_eq!(settings.theme, ThemeChoice::Dark);
+        assert_eq!(settings.hotkey, HotkeyChoice::AltSpace);
     }
 
     #[test]
@@ -323,6 +412,7 @@ mod tests {
             app_name_font: FontChoice::Georgia,
             category_font: FontChoice::CascadiaMono,
             theme: ThemeChoice::CatppuccinMocha,
+            hotkey: HotkeyChoice::CtrlAltP,
         };
 
         settings.save_to(&path);
@@ -343,13 +433,29 @@ mod tests {
         assert_eq!(settings.app_name_font, FontChoice::Consolas);
         assert_eq!(settings.category_font, FontChoice::Consolas);
         assert_eq!(settings.theme, ThemeChoice::Dark);
+        assert_eq!(settings.hotkey, HotkeyChoice::AltSpace);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn hotkey_accepts_legacy_spellings() {
+        let path = temp_path();
+        std::fs::write(&path, "hotkey=Alt+`\n").unwrap();
+
+        let settings = Settings::load_from(&path);
+
+        assert_eq!(settings.hotkey, HotkeyChoice::AltBacktick);
         let _ = std::fs::remove_file(path);
     }
 
     #[test]
     fn invalid_values_fall_back() {
         let path = temp_path();
-        std::fs::write(&path, "font=missing\ntheme=system\nunknown=value\n").unwrap();
+        std::fs::write(
+            &path,
+            "font=missing\ntheme=system\nhotkey=none\nunknown=value\n",
+        )
+        .unwrap();
 
         let settings = Settings::load_from(&path);
 
@@ -357,6 +463,7 @@ mod tests {
         assert_eq!(settings.app_name_font, FontChoice::SegoeUi);
         assert_eq!(settings.category_font, FontChoice::SegoeUi);
         assert_eq!(settings.theme, ThemeChoice::Dark);
+        assert_eq!(settings.hotkey, HotkeyChoice::AltSpace);
         let _ = std::fs::remove_file(path);
     }
 
@@ -372,5 +479,19 @@ mod tests {
                 .iter()
                 .any(|label| label.eq_ignore_ascii_case("system"))
         );
+    }
+
+    #[test]
+    fn hotkey_labels_and_keys_are_distinct() {
+        let mut labels: Vec<&str> = HotkeyChoice::ALL.iter().map(|h| h.label()).collect();
+        labels.sort_unstable();
+        labels.dedup();
+
+        let mut keys: Vec<&str> = HotkeyChoice::ALL.iter().map(|h| h.key()).collect();
+        keys.sort_unstable();
+        keys.dedup();
+
+        assert_eq!(labels.len(), HotkeyChoice::ALL.len());
+        assert_eq!(keys.len(), HotkeyChoice::ALL.len());
     }
 }

@@ -12,7 +12,7 @@ use iced::{Element, Event, Font, Subscription, Task, Theme, window};
 
 use pirsa_core::calc::{self, CalcResult};
 use pirsa_core::search;
-use pirsa_core::settings::{Settings, ThemeChoice};
+use pirsa_core::settings::{HotkeyChoice, Settings, ThemeChoice};
 use pirsa_core::usage::Usage;
 use pirsa_core::util;
 use pirsa_core::{AppEntry, HotkeyStatus, Icon, ScanResult};
@@ -39,6 +39,8 @@ pub struct Launcher {
     pub(crate) settings_window: Option<window::Id>,
     pub(crate) hwnd: Option<isize>,
     pub(crate) hotkey: HotkeyStatus,
+    /// Feedback shown inside the settings window, such as a rejected hotkey.
+    pub(crate) settings_notice: Option<String>,
     pub(crate) error: Option<String>,
     pub(crate) warning: Option<String>,
     pub(crate) indexing: bool,
@@ -86,6 +88,7 @@ impl Launcher {
             settings_window: None,
             hwnd: None,
             hotkey: platform::hotkey_status(),
+            settings_notice: None,
             error: None,
             warning: None,
             indexing: true,
@@ -221,6 +224,28 @@ impl Launcher {
                 self.settings.save();
                 Task::none()
             }
+            ui::SettingsMessage::HotkeyChanged(hotkey) => {
+                let previous = self.settings.hotkey;
+                let previous_status = self.hotkey;
+
+                if platform::set_hotkey(hotkey).available() {
+                    self.settings.hotkey = hotkey;
+                    self.hotkey = HotkeyStatus::Ready;
+                    self.settings_notice = None;
+                } else {
+                    // The platform thread restores the previous binding when
+                    // the new one is already owned by another app.
+                    self.settings.hotkey = previous;
+                    self.hotkey = previous_status;
+                    self.settings_notice = Some(format!(
+                        "{} is already in use; select another hotkey.",
+                        hotkey.label()
+                    ));
+                }
+
+                self.settings.save();
+                Task::none()
+            }
             ui::SettingsMessage::Close => self
                 .settings_window
                 .map(window::close::<Message>)
@@ -234,6 +259,7 @@ impl Launcher {
         } else {
             let (id, open) = window::open(settings_window_settings());
             self.settings_window = Some(id);
+            self.settings_notice = None;
             util::log("opening settings window");
             open.map(Message::SettingsOpened)
         };
@@ -243,7 +269,8 @@ impl Launcher {
 
     pub fn view(&self, window: window::Id) -> Element<'_, Message> {
         if self.settings_window == Some(window) {
-            ui::settings_view(&self.settings, &self.theme).map(Message::Settings)
+            ui::settings_view(&self.settings, &self.theme, self.settings_notice.as_deref())
+                .map(Message::Settings)
         } else {
             ui::view(self).map(Message::Ui)
         }
@@ -620,6 +647,10 @@ impl ui::ViewModel for Launcher {
         self.hotkey
     }
 
+    fn hotkey_choice(&self) -> HotkeyChoice {
+        self.settings.hotkey
+    }
+
     fn error(&self) -> Option<&str> {
         self.error.as_deref()
     }
@@ -755,6 +786,7 @@ mod tests {
             settings_window: None,
             hwnd: None,
             hotkey: HotkeyStatus::Pending,
+            settings_notice: None,
             error: None,
             warning: None,
             indexing: false,
