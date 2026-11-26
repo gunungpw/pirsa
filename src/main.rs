@@ -19,11 +19,18 @@ fn main() -> iced::Result {
         } else {
             "release"
         };
+        let version = env!("CARGO_PKG_VERSION");
         let backtrace = std::backtrace::Backtrace::force_capture();
 
         util::log(format!(
-            "panic in Pirsa {} ({profile}): {info}\n{backtrace}",
-            env!("CARGO_PKG_VERSION")
+            "panic in Pirsa {version} ({profile}): {info}\n{backtrace}"
+        ));
+
+        // Release builds abort on panic, so show why before dying. Debug builds
+        // keep the terminal backtrace instead of a modal dialog.
+        #[cfg(not(debug_assertions))]
+        platform::show_fatal_error(&format!(
+            "Pirsa {version} crashed and must close.\n\n{info}\n\nDetails were written to:\n%LOCALAPPDATA%\\Pirsa\\launcher.log"
         ));
     }));
 

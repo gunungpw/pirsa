@@ -41,7 +41,7 @@ static TRAY_TOOLTIP: Mutex<String> = Mutex::new(String::new());
 
 /// Updates the tray tooltip, for example after the hotkey changes.
 pub fn set_tooltip(tooltip: &str) {
-    *tooltip_text() = tooltip.to_owned();
+    tooltip.clone_into(&mut tooltip_text());
 
     let raw = TRAY_HWND.load(Ordering::Relaxed);
 
@@ -59,7 +59,7 @@ pub fn set_tooltip(tooltip: &str) {
 
     copy_text(&mut data.szTip, tooltip);
 
-    if !unsafe { Shell_NotifyIconW(NIM_MODIFY, &data) }.as_bool() {
+    if !unsafe { Shell_NotifyIconW(NIM_MODIFY, &raw const data) }.as_bool() {
         log("tray could not update its tooltip");
     }
 }
@@ -67,7 +67,7 @@ pub fn set_tooltip(tooltip: &str) {
 fn tooltip_text() -> MutexGuard<'static, String> {
     TRAY_TOOLTIP
         .lock()
-        .unwrap_or_else(|poison| poison.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// Starts the tray thread. Safe to call once during startup.
@@ -103,7 +103,7 @@ fn run() {
         lpszClassName: CLASS_NAME,
     };
 
-    if unsafe { RegisterClassW(&window_class) } == 0 {
+    if unsafe { RegisterClassW(&raw const window_class) } == 0 {
         log("tray could not register its window class");
         return;
     }
@@ -141,15 +141,15 @@ fn run() {
     let mut message = MSG::default();
 
     loop {
-        let result = unsafe { GetMessageW(&mut message, None, 0, 0) };
+        let result = unsafe { GetMessageW(&raw mut message, None, 0, 0) };
 
         if result.0 <= 0 {
             break;
         }
 
         unsafe {
-            let _ = TranslateMessage(&message);
-            DispatchMessageW(&message);
+            let _ = TranslateMessage(&raw const message);
+            DispatchMessageW(&raw const message);
         }
     }
 
@@ -203,7 +203,7 @@ unsafe fn show_menu(hwnd: HWND) {
 
     let mut point = POINT::default();
 
-    if unsafe { GetCursorPos(&mut point) }.is_err() {
+    if unsafe { GetCursorPos(&raw mut point) }.is_err() {
         let _ = unsafe { DestroyMenu(menu) };
         return;
     }
@@ -251,10 +251,10 @@ fn add_icon(hwnd: HWND, instance: HINSTANCE) {
 
     copy_text(&mut data.szTip, tooltip);
 
-    if !unsafe { Shell_NotifyIconW(NIM_ADD, &data) }.as_bool() {
-        log("tray could not add its notification icon");
-    } else {
+    if unsafe { Shell_NotifyIconW(NIM_ADD, &raw const data) }.as_bool() {
         log("tray icon added");
+    } else {
+        log("tray could not add its notification icon");
     }
 }
 
@@ -266,7 +266,7 @@ fn remove_icon(hwnd: HWND) {
         ..Default::default()
     };
 
-    let _ = unsafe { Shell_NotifyIconW(NIM_DELETE, &data) };
+    let _ = unsafe { Shell_NotifyIconW(NIM_DELETE, &raw const data) };
 }
 
 fn load_icon(instance: HINSTANCE) -> HICON {

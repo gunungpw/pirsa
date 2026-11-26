@@ -5,6 +5,57 @@ All notable changes to Pirsa are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+## [0.11.0] - 2026-11-27
+
+### Added
+
+- Configurable folder search scope, edited in **Settings → Folder search** and
+  stored in `%LOCALAPPDATA%\Pirsa\search.txt`: profile-only (default), fixed
+  drives, all drives, or a selected set; extra folders added with the native
+  folder picker; include/exclude rules with whole names, `*` globs and `*\path`
+  suffixes; search depth 1–12; hidden folders opt-in.
+- Persistent folder index (`%LOCALAPPDATA%\Pirsa\folders.index`) built in the
+  background, cached per scope fingerprint, capped at 1.5 million folders, with
+  progress in the settings window and a **Rebuild** button. Folder queries use
+  the index when it is ready and the bounded live walk while it builds.
+- `pirsa_core::search_scope` (scope model, parsing, root expansion, exclusion
+  matching, fingerprint) and `pirsa_platform::drives` /
+  `folder_index` / `folder_picker` modules.
+- The settings categories live in the window state (`SettingsCategory`,
+  `SettingsMessage::CategorySelected`), and the borderless header emits
+  `SettingsMessage::DragWindow`.
+- `pirsa-ui` is split into `launcher`, `settings`, `style`, and `tests`
+  modules behind `lib.rs`, and the launcher state into `src/app/` (`view`,
+  `tests`).
+- `rustfmt.toml` (edition 2024) and `deny.toml` (cargo-deny licence, advisory,
+  and source policy), plus CI jobs for the 1.88 MSRV and the supply-chain
+  check.
+- A `Release` workflow that builds the Windows binary and publishes it when a
+  `v*` tag is pushed.
+
+### Changed
+
+- Folder search now walks every selected root instead of only the profile, and
+  the depth limit applies per root.
+- Folder search is no longer behind a `~` / `>` prefix. Every query ranks apps
+  and folders together in one list (`pirsa_core::results::merge`, `ResultRow`),
+  with folder rows marked **Folder** and apps winning score ties. An empty query
+  searches no folders, and `pirsa_core::folders::FolderQuery` / `parse_query`
+  are gone.
+- `pirsa_core::search::rank_scores` and `pirsa_core::folders::rank_scores`
+  return `(score, index)` pairs on one shared scale; `rank_with_usage` keeps its
+  old signature.
+- System locations (`Windows`, `Program Files`, `ProgramData`, `$Recycle.Bin`,
+  `System Volume Information`) are never searched regardless of scope.
+- The settings window is borderless like the launcher: it draws its own frame
+  and header, the header drags the window, and a **×** button sits beside the
+  title.
+- Settings use two columns: the categories **Appearance**, **Behavior**,
+  **Folder search**, and **Preview** on the left, and the settings of the
+  selected category on the right, where every field carries a one-line hint.
+
 ## [0.10.1] - 2026-11-26
 
 ### Changed

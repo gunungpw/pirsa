@@ -1,0 +1,45 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    name: Windows x64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # `.cargo/config.toml` statically links the MSVC CRT; the binary needs no
+      # Visual C++ Redistributable.
+      - name: Build
+        run: cargo build --release --locked
+
+      - name: Package
+        shell: pwsh
+        run: |
+          $name = "pirsa-${{ github.ref_name }}-windows-x64"
+          New-Item -ItemType Directory -Path $name | Out-Null
+          Copy-Item target/release/pirsa.exe $name/
+          Copy-Item README.md, LICENSE, CHANGELOG.md $name/
+          Compress-Archive -Path $name -DestinationPath "$name.zip"
+
+      - name: Publish
+        uses: softprops/action-gh-release@v2
+        with:
+          files: pirsa-${{ github.ref_name }}-windows-x64.zip
+          generate_release_notes: true

@@ -1,15 +1,24 @@
 //! Small utilities shared by the launcher.
 
+use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-static LOG_LOCK: Mutex<()> = Mutex::new(());
+/// Log files larger than this are rotated (deleted and reopened).
+const MAX_LOG_BYTES: u64 = 512 * 1024;
+
+/// The log file is opened once and reused, so a log write in the update loop
+/// costs a single `write` instead of an open/metadata/close cycle.
+static LOG_FILE: Mutex<Option<File>> = Mutex::new(None);
+static LOG_SIZE: AtomicU64 = AtomicU64::new(0);
 
 /// Lowercases a name and reduces every run of non-alphanumeric characters to a
 /// single space. Used for de-duplication and fuzzy matching so both paths agree
 /// on what "the same name" means.
+#[must_use]
 pub fn normalize_name(value: &str) -> String {
     let mut normalized = String::with_capacity(value.len());
 
@@ -39,6 +48,7 @@ pub struct SearchText {
 }
 
 impl SearchText {
+    #[must_use]
     pub fn new(value: &str) -> Self {
         let normalized = normalize_name(value);
         let characters: Vec<char> = normalized.chars().collect();
@@ -56,27 +66,33 @@ impl SearchText {
         }
     }
 
+    #[must_use]
     pub fn normalized(&self) -> &str {
         &self.normalized
     }
 
+    #[must_use]
     pub fn characters(&self) -> &[char] {
         &self.characters
     }
 
+    #[must_use]
     pub fn acronym(&self) -> &str {
         &self.acronym
     }
 
+    #[must_use]
     pub fn acronym_len(&self) -> usize {
         self.acronym_len
     }
 
     /// Number of characters in the normalized text, not bytes.
+    #[must_use]
     pub fn len(&self) -> usize {
         self.characters.len()
     }
 
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.characters.is_empty()
     }
@@ -103,6 +119,7 @@ const NOISE_WORDS: &[&str] = &[
 ///
 /// Only whole leading words count, so "Helper" and "Removeable Drive" survive
 /// while "Help", "Readme.txt" and "Uninstall Steam" are filtered out.
+#[must_use]
 pub fn is_noise_name(normalized: &str) -> bool {
     NOISE_WORDS.iter().any(|word| {
         normalized == *word
@@ -116,9 +133,6 @@ pub fn is_noise_name(normalized: &str) -> bool {
 /// take the launcher down.
 pub fn log(message: impl AsRef<str>) {
     let message = message.as_ref();
-    let _guard = LOG_LOCK
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
 
     #[cfg(debug_assertions)]
     eprintln!("[pirsa] {message}");
@@ -136,27 +150,52 @@ pub fn log(message: impl AsRef<str>) {
     let _ = std::fs::create_dir_all(&directory);
     let path = directory.join("launcher.log");
 
-    if let Ok(metadata) = std::fs::metadata(&path)
-        && metadata.len() > 512 * 1024
-    {
-        let _ = std::fs::remove_file(&path);
-    }
-
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
         .unwrap_or_default();
+    let line = format!("[{timestamp}] {message}\n");
 
-    if let Ok(mut file) = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(path)
+    let mut file = LOG_FILE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    let rotate =
+        file.is_some() && LOG_SIZE.load(Ordering::Relaxed) + line.len() as u64 > MAX_LOG_BYTES;
+
+    if rotate {
+        // Drop the handle before deleting so the next open starts fresh.
+        *file = None;
+        let _ = std::fs::remove_file(&path);
+        LOG_SIZE.store(0, Ordering::Relaxed);
+    }
+
+    if file.is_none() {
+        match std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path)
+        {
+            Ok(opened) => {
+                LOG_SIZE.store(
+                    opened.metadata().map_or(0, |meta| meta.len()),
+                    Ordering::Relaxed,
+                );
+                *file = Some(opened);
+            }
+            Err(_) => return,
+        }
+    }
+
+    if let Some(handle) = file.as_mut()
+        && handle.write_all(line.as_bytes()).is_ok()
     {
-        let _ = writeln!(file, "[{timestamp}] {message}");
+        LOG_SIZE.fetch_add(line.len() as u64, Ordering::Relaxed);
     }
 }
 
 /// The per-user data directory for the launcher.
+#[must_use]
 pub fn data_directory() -> Option<PathBuf> {
     std::env::var_os("LOCALAPPDATA").map(|base| PathBuf::from(base).join("Pirsa"))
 }
@@ -168,7 +207,7 @@ pub(crate) fn write_atomic(
     body: &[u8],
 ) -> std::io::Result<()> {
     {
-        let mut file = std::fs::File::create(temporary)?;
+        let mut file = File::create(temporary)?;
         file.write_all(body)?;
         file.flush()?;
     }

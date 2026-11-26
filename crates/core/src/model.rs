@@ -27,6 +27,7 @@ pub struct AppEntry {
 
 impl AppEntry {
     /// Builds an entry and precomputes the text used by search.
+    #[must_use]
     pub fn new(name: String, detail: String, target: LaunchTarget) -> Self {
         let name_search = SearchText::new(&name);
         let detail_search = SearchText::new(&detail);
@@ -40,29 +41,35 @@ impl AppEntry {
         }
     }
 
+    #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
+    #[must_use]
     pub fn detail(&self) -> &str {
         &self.detail
     }
 
+    #[must_use]
     pub fn target(&self) -> &LaunchTarget {
         &self.target
     }
 
     /// Normalized name used for de-duplication, usage history, and searching.
+    #[must_use]
     pub fn search_key(&self) -> &str {
         self.name_search.normalized()
     }
 
     /// Precomputed text for the display name.
+    #[must_use]
     pub fn name_search(&self) -> &SearchText {
         &self.name_search
     }
 
     /// Precomputed text for the category/kind detail.
+    #[must_use]
     pub fn detail_search(&self) -> &SearchText {
         &self.detail_search
     }
@@ -96,6 +103,7 @@ pub enum HotkeyStatus {
 }
 
 impl HotkeyStatus {
+    #[must_use]
     pub fn available(self) -> bool {
         self == Self::Ready
     }

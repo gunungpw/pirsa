@@ -15,6 +15,8 @@ use crate::util;
 const FILE_NAME: &str = "usage.txt";
 /// History is capped so the file stays small and loading stays instant.
 const MAX_ENTRIES: usize = 500;
+/// Schema version written to the file header.
+const VERSION: u32 = 1;
 /// Launch count that earns the maximum ranking bonus.
 const BONUS_LAUNCHES: u32 = 10;
 /// Points added per launch. Capped so relevance still dominates ranking: this
@@ -33,6 +35,7 @@ pub struct UsageEntry {
 impl UsageEntry {
     /// Ranking bonus for this entry, between 0 and
     /// `BONUS_LAUNCHES * BONUS_PER_LAUNCH`.
+    #[must_use]
     pub fn score_bonus(&self) -> i32 {
         self.launches.min(BONUS_LAUNCHES) as i32 * BONUS_PER_LAUNCH
     }
@@ -49,11 +52,13 @@ impl Usage {
     ///
     /// A missing, unreadable, or damaged file simply yields empty history:
     /// usage tracking must never take the launcher down.
+    #[must_use]
     pub fn load() -> Self {
         Self::load_from(&history_path())
     }
 
     /// Loads history from an explicit path.
+    #[must_use]
     pub fn load_from(path: &Path) -> Self {
         let mut usage = Self::default();
 
@@ -64,7 +69,7 @@ impl Usage {
         for line in contents.lines() {
             let line = line.trim();
 
-            if line.is_empty() || line.starts_with('#') {
+            if line.is_empty() || line.starts_with('#') || line.starts_with("version=") {
                 continue;
             }
 
@@ -124,7 +129,8 @@ impl Usage {
         });
         entries.truncate(MAX_ENTRIES);
 
-        let mut body = String::from("# Pirsa usage history: launches<TAB>last-used<TAB>app\n");
+        let mut body =
+            format!("version={VERSION}\n# Pirsa usage history: launches<TAB>last-used<TAB>app\n");
 
         for (key, entry) in entries {
             body.push_str(&format!(
@@ -173,15 +179,17 @@ impl Usage {
     }
 
     /// The remembered history for `key`, or empty history when unknown.
+    #[must_use]
     pub fn entry(&self, key: &str) -> UsageEntry {
         self.entries.get(key).copied().unwrap_or_default()
     }
 }
 
 fn history_path() -> PathBuf {
-    util::data_directory()
-        .map(|directory| directory.join(FILE_NAME))
-        .unwrap_or_else(|| PathBuf::from(FILE_NAME))
+    util::data_directory().map_or_else(
+        || PathBuf::from(FILE_NAME),
+        |directory| directory.join(FILE_NAME),
+    )
 }
 
 fn now() -> u64 {

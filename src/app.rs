@@ -1,6 +1,7 @@
 //! Launcher state and iced update logic.
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use iced::futures::{StreamExt, stream};
@@ -8,11 +9,14 @@ use iced::keyboard::key::Named;
 use iced::keyboard::{Event as KeyboardEvent, Key, Modifiers};
 use iced::widget::image::Handle;
 use iced::widget::operation;
-use iced::{Element, Event, Font, Subscription, Task, Theme, window};
+use iced::{Event, Subscription, Task, Theme, window};
 
 use pirsa_core::calc::{self, CalcResult};
-use pirsa_core::folders::{self as folder_index, FolderEntry, FolderQuery};
+use pirsa_core::folders::{self, FolderEntry};
+use pirsa_core::results;
+use pirsa_core::results::ResultRow;
 use pirsa_core::search;
+use pirsa_core::search_scope::{DriveDetails, DriveMode, IndexStatus, SearchScope};
 use pirsa_core::settings::{HotkeyChoice, Settings, ThemeChoice};
 use pirsa_core::usage::Usage;
 use pirsa_core::util;
@@ -23,18 +27,21 @@ use pirsa_ui as ui;
 /// The application's complete state.
 pub struct Launcher {
     pub(crate) apps: Vec<AppEntry>,
-    pub(crate) results: Vec<usize>,
+    /// Apps and folders ranked into one list for the current query.
+    pub(crate) rows: Vec<ResultRow>,
     /// Optional calculator/unit-conversion result for the current query.
     pub(crate) calc: Option<CalcResult>,
     /// Launch history: how often each app was opened, used for ordering.
     pub(crate) usage: Usage,
     /// Real application icons, keyed by display name.
     pub(crate) icons: HashMap<String, Handle>,
-    /// Matches of the current `~` / `>` folder query.
+    /// Folder matches of the current query, indexed by [`ResultRow::Folder`].
     pub(crate) folders: Vec<FolderEntry>,
-    pub(crate) folder_results: Vec<usize>,
-    /// Present while the search field holds a folder-mode query.
-    pub(crate) folder_query: Option<FolderQuery>,
+    /// Where folder search looks and what it skips.
+    pub(crate) scope: SearchScope,
+    pub(crate) drives: Vec<DriveDetails>,
+    pub(crate) exclude_draft: String,
+    pub(crate) index_status: IndexStatus,
     pub(crate) settings: Settings,
     pub(crate) theme: Theme,
     pub(crate) query: String,
@@ -49,6 +56,8 @@ pub struct Launcher {
     pub(crate) hotkey_pending: Option<HotkeyChoice>,
     /// Feedback shown inside the settings window, such as a rejected hotkey.
     pub(crate) settings_notice: Option<String>,
+    /// Category shown in the settings window's right column.
+    pub(crate) settings_category: ui::SettingsCategory,
     pub(crate) error: Option<String>,
     pub(crate) warning: Option<String>,
     pub(crate) indexing: bool,
@@ -83,26 +92,36 @@ pub enum Message {
         choice: HotkeyChoice,
         status: HotkeyStatus,
     },
-    /// Result of a `~` / `>` filesystem search.
+    /// Result of a folder search for the current query.
     FolderSearchComplete {
         generation: u64,
         folders: Vec<FolderEntry>,
     },
+    /// Result of the native folder picker.
+    FolderPicked(Option<PathBuf>),
+    /// Periodic refresh while the folder index is building.
+    IndexTick,
     Event(window::Id, Event),
 }
 
 impl Launcher {
     pub fn boot(settings: Settings) -> (Self, Task<Message>) {
         let theme = theme_from_choice(settings.theme);
+        let scope = SearchScope::load();
+        let drives = platform::drives::list();
+        platform::ensure_folder_index(&scope);
+        let index_status = platform::folder_index_status();
         let mut launcher = Self {
             apps: Vec::new(),
-            results: Vec::new(),
+            rows: Vec::new(),
             calc: None,
             usage: Usage::load(),
             icons: HashMap::new(),
             folders: Vec::new(),
-            folder_results: Vec::new(),
-            folder_query: None,
+            scope,
+            drives,
+            exclude_draft: String::new(),
+            index_status,
             settings,
             theme,
             query: String::new(),
@@ -115,6 +134,7 @@ impl Launcher {
             hotkey: platform::hotkey_status(),
             hotkey_pending: None,
             settings_notice: None,
+            settings_category: ui::SettingsCategory::default(),
             error: None,
             warning: None,
             indexing: true,
@@ -134,7 +154,8 @@ impl Launcher {
         // Do not block window creation on the Start Menu scan. The window
         // appears immediately while the shell worker indexes in the background.
         let scan = launcher.begin_scan();
-        let task = Task::batch([ready, scan]);
+        let ticks = launcher.start_index_tick();
+        let task = Task::batch([ready, scan, ticks]);
 
         (launcher, task)
     }
@@ -194,6 +215,17 @@ impl Launcher {
 
                 Task::none()
             }
+            Message::FolderPicked(picked) => match picked {
+                Some(path) => {
+                    self.scope.add_include(path);
+                    self.scope_changed()
+                }
+                None => Task::none(),
+            },
+            Message::IndexTick => {
+                self.index_status = platform::folder_index_status();
+                self.start_index_tick()
+            }
             Message::WindowReady(id, hwnd) => {
                 self.window_id = Some(id);
                 self.hwnd = Some(hwnd);
@@ -243,45 +275,39 @@ impl Launcher {
             ui::Message::Quit => iced::exit(),
             ui::Message::DragWindow => self
                 .window_id
-                .map(window::drag::<Message>)
-                .unwrap_or_else(Task::none),
+                .map_or_else(Task::none, window::drag::<Message>),
         }
     }
 
     fn change_query(&mut self, query: String) -> Task<Message> {
         self.query = query;
         self.calc = calc::evaluate(&self.query);
-        self.folder_query = folder_index::parse_query(&self.query);
         self.error = None;
 
-        if self.folder_query.is_none() {
+        let term = self.query.trim().to_owned();
+
+        if term.is_empty() {
+            // Nothing to match, so drop the previous folder matches instead of
+            // letting stale rows linger behind an empty query.
             self.folders.clear();
-            self.folder_results.clear();
         }
 
+        // Matches still on hand are re-ranked against the new query right away;
+        // folders that no longer match drop out on their own.
         self.recompute();
         self.selected = 0;
 
-        match &self.folder_query {
-            Some(folder_query) if !folder_query.is_empty() => {
-                self.begin_folder_search(folder_query.term().to_owned())
-            }
-            Some(_) => {
-                // A bare `~` or `>` shows the hint instead of walking the disk.
-                self.folders.clear();
-                self.folder_results.clear();
-                Task::none()
-            }
-            None => Task::none(),
+        if term.is_empty() {
+            Task::none()
+        } else {
+            self.begin_folder_search(term)
         }
     }
 
     fn clear_query(&mut self) -> Task<Message> {
         self.query.clear();
         self.calc = None;
-        self.folder_query = None;
         self.folders.clear();
-        self.folder_results.clear();
         self.error = None;
         self.recompute();
         self.selected = 0;
@@ -292,19 +318,66 @@ impl Launcher {
     fn begin_folder_search(&mut self, term: String) -> Task<Message> {
         self.folder_generation = self.folder_generation.wrapping_add(1);
         let generation = self.folder_generation;
+        let scope = self.scope.clone();
 
         Task::perform(
             async move {
                 // A burst of keystrokes should walk the profile once, not once
                 // per character.
                 tokio::time::sleep(Duration::from_millis(140)).await;
-                platform::search_folders(term).await
+                platform::search_folders(scope, term).await
             },
             move |folders| Message::FolderSearchComplete {
                 generation,
                 folders,
             },
         )
+    }
+
+    fn start_index_tick(&self) -> Task<Message> {
+        if !self.index_status.building {
+            return Task::none();
+        }
+
+        Task::future(async {
+            tokio::time::sleep(Duration::from_millis(400)).await;
+            Message::IndexTick
+        })
+    }
+
+    /// Rebuilds the folder index from scratch.
+    fn rebuild_index(&mut self) -> Task<Message> {
+        if !cfg!(test) {
+            platform::rebuild_folder_index(&self.scope);
+        }
+
+        self.index_status = platform::folder_index_status();
+        self.start_index_tick()
+    }
+
+    /// Persists a scope edit and makes sure the index matches it.
+    fn scope_changed(&mut self) -> Task<Message> {
+        self.scope.save();
+
+        if !cfg!(test) {
+            platform::ensure_folder_index(&self.scope);
+        }
+
+        self.index_status = platform::folder_index_status();
+        self.folders.clear();
+        self.folder_generation = self.folder_generation.wrapping_add(1);
+        // Rows index into the folder matches just dropped.
+        self.recompute();
+
+        self.start_index_tick()
+    }
+
+    /// Drive letters currently selected, defaulting to the attached drives.
+    fn selected_letters(&self) -> Vec<char> {
+        match &self.scope.drives {
+            DriveMode::Selected(letters) => letters.clone(),
+            _ => self.drives.iter().map(|drive| drive.info.letter).collect(),
+        }
     }
 
     fn update_settings(&mut self, message: ui::SettingsMessage) -> Task<Message> {
@@ -348,17 +421,103 @@ impl Launcher {
                 })
             }
             ui::SettingsMessage::Close => self.close_settings(),
+            ui::SettingsMessage::ScopePresetChanged(preset) => {
+                self.scope.drives = match preset {
+                    ui::ScopePreset::Profile => DriveMode::Profile,
+                    ui::ScopePreset::Fixed => DriveMode::Fixed,
+                    ui::ScopePreset::All => DriveMode::All,
+                    ui::ScopePreset::Selected => {
+                        let letters = self.selected_letters();
+
+                        if letters.is_empty() {
+                            DriveMode::Profile
+                        } else {
+                            DriveMode::Selected(letters)
+                        }
+                    }
+                };
+
+                self.scope_changed()
+            }
+            ui::SettingsMessage::DriveToggled(letter, checked) => {
+                let mut letters = self.selected_letters();
+
+                if checked {
+                    if !letters.contains(&letter) {
+                        letters.push(letter);
+                    }
+                } else {
+                    letters.retain(|existing| *existing != letter);
+                }
+
+                letters.sort_unstable();
+
+                self.scope.drives = if letters.is_empty() {
+                    DriveMode::Profile
+                } else {
+                    DriveMode::Selected(letters)
+                };
+
+                self.scope_changed()
+            }
+            ui::SettingsMessage::AddFolderRequested => {
+                Task::perform(platform::pick_folder(), Message::FolderPicked)
+            }
+            ui::SettingsMessage::IncludeRemoved(path) => {
+                self.scope.remove_include(&path);
+                self.scope_changed()
+            }
+            ui::SettingsMessage::ExcludeDraftChanged(draft) => {
+                self.exclude_draft = draft;
+                Task::none()
+            }
+            ui::SettingsMessage::ExcludeAdded => {
+                if self.scope.add_exclude(&self.exclude_draft) {
+                    self.exclude_draft.clear();
+                    return self.scope_changed();
+                }
+
+                self.exclude_draft.clear();
+                Task::none()
+            }
+            ui::SettingsMessage::ExcludeRemoved(rule) => {
+                self.scope.remove_exclude(&rule);
+                self.scope_changed()
+            }
+            ui::SettingsMessage::DepthChanged(depth) => {
+                // Only stores the new depth; the rebuild waits for release so a
+                // drag does not restart the indexer on every step.
+                self.scope.set_depth(depth as usize);
+                self.scope.save();
+                Task::none()
+            }
+            ui::SettingsMessage::ScopeCommitted => self.scope_changed(),
+            ui::SettingsMessage::HiddenToggled(hidden) => {
+                self.scope.include_hidden = hidden;
+                self.scope_changed()
+            }
+            ui::SettingsMessage::RebuildIndex => self.rebuild_index(),
+            ui::SettingsMessage::DragWindow => self
+                .settings_window
+                .map_or_else(Task::none, window::drag::<Message>),
+            ui::SettingsMessage::CategorySelected(category) => {
+                self.settings_category = category;
+                Task::none()
+            }
         }
     }
 
     fn close_settings(&mut self) -> Task<Message> {
         self.settings_window
             .take()
-            .map(window::close::<Message>)
-            .unwrap_or_else(Task::none)
+            .map_or_else(Task::none, window::close::<Message>)
     }
 
     fn open_settings(&mut self) -> Task<Message> {
+        // Drives can be plugged in after boot, so refresh before showing the
+        // scope controls.
+        self.drives = platform::drives::list();
+
         let task = if let Some(id) = self.settings_window {
             window::gain_focus::<Message>(id)
         } else {
@@ -373,59 +532,8 @@ impl Launcher {
         Task::batch([task, self.hide()])
     }
 
-    pub fn view(&self, window: window::Id) -> Element<'_, Message> {
-        if self.settings_window == Some(window) {
-            ui::settings_view(&self.settings, &self.theme, self.settings_notice.as_deref())
-                .map(Message::Settings)
-        } else {
-            ui::view(self.view_state()).map(Message::Ui)
-        }
-    }
-
-    /// Borrows the read-only slice of state the launcher view renders.
-    fn view_state(&self) -> ui::ViewState<'_> {
-        let folder_mode = self.folder_query.is_some();
-
-        ui::ViewState {
-            apps: &self.apps,
-            results: &self.results,
-            calc: self.calc.as_ref(),
-            icons: &self.icons,
-            folders: &self.folders,
-            folder_results: &self.folder_results,
-            folder_term: self.folder_query.as_ref().map(|query| query.term()),
-            query: &self.query,
-            selected: self.selected,
-            hotkey: self.hotkey,
-            hotkey_choice: self.settings.hotkey,
-            // The "no apps indexed" error is irrelevant while searching folders.
-            error: if folder_mode {
-                None
-            } else {
-                self.error.as_deref()
-            },
-            warning: self.warning.as_deref(),
-            indexing: self.indexing,
-            result_limit: self.result_limit(),
-            theme: &self.theme,
-            font: Font::with_name(self.settings.font.name()),
-            app_name_font: Font::with_name(self.settings.app_name_font.name()),
-            category_font: Font::with_name(self.settings.category_font.name()),
-        }
-    }
-
-    pub fn title(&self, window: window::Id) -> String {
-        if self.settings_window == Some(window) {
-            "Pirsa Settings".to_owned()
-        } else {
-            "Pirsa".to_owned()
-        }
-    }
-
-    pub fn window_theme(&self) -> Theme {
-        self.theme.clone()
-    }
-
+    // Signature is fixed by `iced::daemon`, which passes the state.
+    #[allow(clippy::unused_self)]
     pub fn subscription(&self) -> Subscription<Message> {
         let platform_signals = Subscription::run(|| {
             // Deliver a first message so requests that arrived before the UI
@@ -479,15 +587,9 @@ impl Launcher {
     }
 
     fn toggle(&mut self) -> Task<Message> {
-        let actually_visible = self
-            .hwnd
-            .map(platform::window::is_visible)
-            .unwrap_or(self.visible);
+        let actually_visible = self.hwnd.map_or(self.visible, platform::window::is_visible);
 
-        let foreground = self
-            .hwnd
-            .map(platform::window::is_foreground)
-            .unwrap_or(false);
+        let foreground = self.hwnd.is_some_and(platform::window::is_foreground);
 
         util::log(format!(
             "toggle requested (visible={actually_visible}, foreground={foreground})"
@@ -527,7 +629,7 @@ impl Launcher {
         }
 
         if let Some(hwnd) = self.hwnd {
-            platform::window::focus(hwnd);
+            let _ = platform::window::focus(hwnd);
         }
 
         focus_input()
@@ -542,9 +644,9 @@ impl Launcher {
         self.focused = false;
         self.reset_search();
 
-        self.window_id
-            .map(|id| window::set_mode::<Message>(id, window::Mode::Hidden))
-            .unwrap_or_else(Task::none)
+        self.window_id.map_or_else(Task::none, |id| {
+            window::set_mode::<Message>(id, window::Mode::Hidden)
+        })
     }
 
     /// Launches the app identified by its stable search key.
@@ -575,69 +677,50 @@ impl Launcher {
     }
 
     fn activate_selected(&mut self) -> Task<Message> {
-        if self.folder_query.is_some() {
-            return self.open_folder(self.selected);
+        if self.calc.is_some() && self.selected == 0 {
+            return self.copy_calc();
         }
 
-        let position = if self.calc.is_some() {
-            if self.selected == 0 {
-                return self.copy_calc();
-            }
-
-            self.selected - 1
-        } else {
+        self.activate_row(
             self.selected
-        };
-
-        self.activate_position(position)
+                .saturating_sub(usize::from(self.calc.is_some())),
+        )
     }
 
-    /// Launches the app row at `position` in the result list.
-    fn activate_position(&mut self, position: usize) -> Task<Message> {
-        let Some(&index) = self.results.get(position) else {
-            return Task::none();
-        };
+    /// Launches whatever row sits at `position`, app or folder.
+    fn activate_row(&mut self, position: usize) -> Task<Message> {
+        match self.rows.get(position) {
+            Some(ResultRow::App(index)) => {
+                let Some(app) = self.apps.get(*index) else {
+                    return Task::none();
+                };
 
-        let Some(app) = self.apps.get(index) else {
-            return Task::none();
-        };
+                let key = app.search_key().to_owned();
+                self.activate(&key)
+            }
+            Some(ResultRow::Folder(index)) => {
+                let Some(folder) = self.folders.get(*index) else {
+                    return Task::none();
+                };
 
-        let key = app.search_key().to_owned();
-        self.activate(&key)
+                let path = folder.path().to_path_buf();
+                self.open_folder_path(&path)
+            }
+            None => Task::none(),
+        }
     }
 
     /// `Ctrl+1` … `Ctrl+8` launch the nth row visible to the user.
     fn activate_number(&mut self, number: usize) -> Task<Message> {
-        let position = number.saturating_sub(1);
-
-        if self.folder_query.is_some() {
-            return self.open_folder(position);
-        }
-
-        // App rows start after the calculation card when one is visible.
-        self.activate_position(position + usize::from(self.calc.is_some()))
-    }
-
-    /// Opens the folder result at `position`.
-    fn open_folder(&mut self, position: usize) -> Task<Message> {
-        let Some(&index) = self.folder_results.get(position) else {
-            return Task::none();
-        };
-
-        let Some(folder) = self.folders.get(index) else {
-            return Task::none();
-        };
-
-        let path = folder.path().to_path_buf();
-        self.open_folder_path(&path)
+        self.activate_row(number.saturating_sub(1))
     }
 
     fn open_folder_path(&mut self, path: &std::path::Path) -> Task<Message> {
         if let Err(error) = platform::open_folder(path) {
-            let name = path
-                .file_name()
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| path.display().to_string());
+            let name = path.file_name().map_or_else(
+                || path.display().to_string(),
+                |name| name.to_string_lossy().into_owned(),
+            );
 
             self.error = Some(format!("Could not open {name}: {error}"));
             util::log(format!("open failed for {}: {error}", path.display()));
@@ -713,7 +796,7 @@ impl Launcher {
         // Icons of apps that dropped out of the index must not linger, and the
         // batch below only covers the apps that still lack one.
         {
-            let current: HashSet<&str> = self.apps.iter().map(|app| app.search_key()).collect();
+            let current: HashSet<&str> = self.apps.iter().map(AppEntry::search_key).collect();
             self.icons.retain(|key, _| current.contains(key.as_str()));
         }
 
@@ -733,6 +816,7 @@ impl Launcher {
     fn reset_search(&mut self) {
         self.query.clear();
         self.calc = None;
+        self.folders.clear();
         self.error = None;
         self.recompute();
         self.selected = 0;
@@ -762,13 +846,10 @@ impl Launcher {
     }
 
     fn recompute(&mut self) {
-        if let Some(folder_query) = &self.folder_query {
-            self.folder_results = folder_index::rank(&self.folders, folder_query.term());
-            self.results.clear();
-        } else {
-            self.results = search::rank_with_usage(&self.apps, &self.query, &self.usage);
-            self.folder_results.clear();
-        }
+        let apps = search::rank_scores(&self.apps, &self.query, &self.usage);
+        let folders = folders::rank_scores(&self.folders, &self.query);
+
+        self.rows = results::merge(&apps, &folders, usize::MAX);
 
         let selectable = self.selectable_count();
 
@@ -777,24 +858,18 @@ impl Launcher {
         }
     }
 
-    /// Number of rows that fit on screen in the current mode.
+    /// Number of rows that fit on screen.
     pub(crate) fn result_limit(&self) -> usize {
-        if self.folder_query.is_some() {
-            ui::MAX_RESULTS
-        } else if self.calc.is_some() {
+        if self.calc.is_some() {
             ui::MAX_RESULTS_WITH_CALC
         } else {
             ui::MAX_RESULTS
         }
     }
 
-    /// Calculation card first, then the visible app or folder rows.
+    /// Calculation card first, then the visible app and folder rows.
     fn selectable_count(&self) -> usize {
-        if self.folder_query.is_some() {
-            return self.folder_results.len().min(self.result_limit());
-        }
-
-        self.results.len().min(self.result_limit()) + usize::from(self.calc.is_some())
+        self.rows.len().min(self.result_limit()) + usize::from(self.calc.is_some())
     }
 
     fn handle_event(&mut self, window_id: window::Id, event: Event) -> Task<Message> {
@@ -855,7 +930,7 @@ impl Launcher {
             };
         }
 
-        if modifiers.control() && matches!(key, Key::Character("q") | Key::Character("Q")) {
+        if modifiers.control() && matches!(key, Key::Character("q" | "Q")) {
             return iced::exit();
         }
 
@@ -881,11 +956,21 @@ impl Launcher {
             Key::Named(Named::ArrowUp) => self.update(Message::Ui(ui::Message::Navigate(-1))),
             Key::Named(Named::ArrowDown) => self.update(Message::Ui(ui::Message::Navigate(1))),
             Key::Named(Named::Enter) => self.activate_selected(),
-            Key::Named(Named::F5) => self.rescan(),
+            Key::Named(Named::F5) => {
+                let scan = self.rescan();
+                let index = self.rebuild_index();
+
+                Task::batch([scan, index])
+            }
             _ => Task::none(),
         }
     }
 }
+
+mod view;
+
+#[cfg(test)]
+mod tests;
 
 fn focus_input() -> Task<Message> {
     operation::focus::<Message>(ui::INPUT_ID)
@@ -923,17 +1008,26 @@ fn launcher_window_settings(visible: bool) -> window::Settings {
 }
 
 fn settings_window_settings() -> window::Settings {
+    // Borderless like the launcher: the view draws its own frame and header,
+    // and the header is the drag handle.
+    let platform_specific = window::settings::PlatformSpecific {
+        undecorated_shadow: true,
+        corner_preference: window::settings::platform::CornerPreference::RoundSmall,
+        ..window::settings::PlatformSpecific::default()
+    };
+
     window::Settings {
         size: iced::Size::new(ui::SETTINGS_WINDOW_WIDTH, ui::SETTINGS_WINDOW_HEIGHT),
         position: window::Position::Centered,
         resizable: false,
         minimizable: false,
         closeable: true,
-        decorations: true,
+        decorations: false,
         transparent: false,
         visible: true,
         icon: app_icon(),
         exit_on_close_request: true,
+        platform_specific,
         ..window::Settings::default()
     }
 }
@@ -965,269 +1059,5 @@ fn theme_from_choice(choice: ThemeChoice) -> Theme {
         ThemeChoice::GruvboxLight => Theme::GruvboxLight,
         ThemeChoice::CatppuccinLatte => Theme::CatppuccinLatte,
         ThemeChoice::TokyoNightLight => Theme::TokyoNightLight,
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use pirsa_core::LaunchTarget;
-
-    fn launcher_with_results(count: usize) -> Launcher {
-        Launcher {
-            apps: Vec::new(),
-            results: (0..count).collect(),
-            calc: None,
-            usage: Usage::default(),
-            icons: HashMap::new(),
-            folders: Vec::new(),
-            folder_results: Vec::new(),
-            folder_query: None,
-            settings: Settings::default(),
-            theme: theme_from_choice(ThemeChoice::Dark),
-            query: String::new(),
-            selected: 0,
-            visible: true,
-            focused: false,
-            window_id: None,
-            settings_window: None,
-            hwnd: None,
-            hotkey: HotkeyStatus::Pending,
-            hotkey_pending: None,
-            settings_notice: None,
-            error: None,
-            warning: None,
-            indexing: false,
-            rescan_queued: false,
-            folder_generation: 0,
-            scan_generation: 0,
-            icon_generation: 0,
-        }
-    }
-
-    #[test]
-    fn navigation_stays_within_visible_rows() {
-        let mut launcher = launcher_with_results(20);
-
-        let _ = launcher.update(Message::Ui(ui::Message::Navigate(100)));
-        assert_eq!(launcher.selected, ui::MAX_RESULTS - 1);
-
-        let _ = launcher.update(Message::Ui(ui::Message::Navigate(-100)));
-        assert_eq!(launcher.selected, 0);
-    }
-
-    #[test]
-    fn stale_scan_results_are_ignored() {
-        let mut launcher = launcher_with_results(0);
-        launcher.scan_generation = 2;
-        launcher.indexing = true;
-
-        let _ = launcher.apply_scan(
-            1,
-            ScanResult {
-                apps: Vec::new(),
-                warning: None,
-            },
-        );
-
-        assert!(launcher.apps.is_empty());
-        assert!(launcher.indexing);
-    }
-
-    #[test]
-    fn rescan_is_queued_while_indexing() {
-        let mut launcher = launcher_with_results(0);
-        launcher.scan_generation = 1;
-        launcher.indexing = true;
-
-        let _ = launcher.rescan();
-
-        assert_eq!(launcher.scan_generation, 1);
-        assert!(launcher.rescan_queued);
-
-        launcher.indexing = false;
-        let _ = launcher.rescan();
-
-        assert_eq!(launcher.scan_generation, 2);
-        assert!(!launcher.rescan_queued);
-    }
-
-    #[test]
-    fn show_request_reveals_a_hidden_launcher() {
-        let mut launcher = launcher_with_results(0);
-        launcher.visible = false;
-
-        let _ = launcher.apply_requests(platform::Requests {
-            show: true,
-            ..platform::Requests::default()
-        });
-
-        assert!(launcher.visible);
-    }
-
-    #[test]
-    fn rejected_hotkey_keeps_the_previous_choice() {
-        let mut launcher = launcher_with_results(0);
-        launcher.settings.hotkey = HotkeyChoice::AltSpace;
-
-        let _ = launcher.update(Message::HotkeyChangeFinished {
-            choice: HotkeyChoice::CtrlSpace,
-            status: HotkeyStatus::Unavailable,
-        });
-
-        assert_eq!(launcher.settings.hotkey, HotkeyChoice::AltSpace);
-        assert!(launcher.settings_notice.is_some());
-        assert_eq!(launcher.hotkey_pending, None);
-    }
-
-    #[test]
-    fn accepted_hotkey_updates_the_choice() {
-        let mut launcher = launcher_with_results(0);
-        launcher.settings.hotkey = HotkeyChoice::AltSpace;
-
-        let _ = launcher.update(Message::HotkeyChangeFinished {
-            choice: HotkeyChoice::CtrlSpace,
-            status: HotkeyStatus::Ready,
-        });
-
-        assert_eq!(launcher.settings.hotkey, HotkeyChoice::CtrlSpace);
-        assert!(launcher.settings_notice.is_none());
-    }
-
-    #[test]
-    fn icons_of_removed_apps_are_pruned() {
-        let mut launcher = launcher_with_results(0);
-        launcher.scan_generation = 1;
-        launcher
-            .icons
-            .insert("gone".to_owned(), Handle::from_rgba(1, 1, vec![0; 4]));
-
-        let _ = launcher.apply_scan(
-            1,
-            ScanResult {
-                apps: vec![AppEntry::new(
-                    "Notepad".to_owned(),
-                    "Start Menu".to_owned(),
-                    LaunchTarget::Shell("test:notepad".to_owned()),
-                )],
-                warning: None,
-            },
-        );
-
-        assert!(!launcher.icons.contains_key("gone"));
-    }
-
-    #[test]
-    fn calculation_card_is_the_first_selection() {
-        let mut launcher = launcher_with_results(10);
-        launcher.calc = Some(CalcResult {
-            kind: calc::CalcKind::Math,
-            expression: "2 + 2".to_owned(),
-            primary: "4".to_owned(),
-            detail: String::new(),
-            copy_text: "4".to_owned(),
-        });
-
-        assert_eq!(launcher.result_limit(), ui::MAX_RESULTS_WITH_CALC);
-        assert_eq!(launcher.selectable_count(), ui::MAX_RESULTS_WITH_CALC + 1);
-
-        let _ = launcher.update(Message::Ui(ui::Message::Navigate(100)));
-        assert_eq!(launcher.selected, ui::MAX_RESULTS_WITH_CALC);
-
-        let _ = launcher.update(Message::Ui(ui::Message::Navigate(-100)));
-        assert_eq!(launcher.selected, 0);
-    }
-
-    fn folder_entry(path: &str) -> FolderEntry {
-        let path = std::path::PathBuf::from(path);
-        let name = path
-            .file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_default();
-
-        FolderEntry::new(path, name)
-    }
-
-    #[test]
-    fn tilde_query_enters_folder_mode() {
-        let mut launcher = launcher_with_results(3);
-
-        let _ = launcher.change_query("~report".to_owned());
-
-        assert!(launcher.folder_query.is_some());
-        assert!(launcher.results.is_empty());
-        assert_eq!(launcher.result_limit(), ui::MAX_RESULTS);
-    }
-
-    #[test]
-    fn a_plain_query_leaves_folder_mode() {
-        let mut launcher = launcher_with_results(0);
-
-        let _ = launcher.change_query("~report".to_owned());
-        launcher
-            .folders
-            .push(folder_entry("C:\\Users\\me\\reports"));
-
-        let _ = launcher.change_query("note".to_owned());
-
-        assert!(launcher.folder_query.is_none());
-        assert!(launcher.folders.is_empty());
-        assert!(launcher.folder_results.is_empty());
-    }
-
-    #[test]
-    fn folder_results_rank_and_count_toward_selection() {
-        let mut launcher = launcher_with_results(0);
-
-        let _ = launcher.change_query("~report".to_owned());
-        let generation = launcher.folder_generation;
-
-        let _ = launcher.update(Message::FolderSearchComplete {
-            generation,
-            folders: vec![
-                folder_entry("C:\\Users\\me\\old-reports"),
-                folder_entry("C:\\Users\\me\\notes"),
-                folder_entry("C:\\Users\\me\\reports"),
-            ],
-        });
-
-        // "reports" (prefix match) outranks "old-reports" (substring).
-        assert_eq!(launcher.folder_results, vec![2, 0]);
-        assert_eq!(launcher.selectable_count(), 2);
-
-        let _ = launcher.update(Message::Ui(ui::Message::Navigate(100)));
-        assert_eq!(launcher.selected, 1);
-    }
-
-    #[test]
-    fn stale_folder_searches_are_ignored() {
-        let mut launcher = launcher_with_results(0);
-
-        let _ = launcher.change_query("~report".to_owned());
-        let stale = launcher.folder_generation;
-
-        let _ = launcher.change_query("~report2".to_owned());
-        let _ = launcher.update(Message::FolderSearchComplete {
-            generation: stale,
-            folders: vec![folder_entry("C:\\Users\\me\\reports")],
-        });
-
-        assert!(launcher.folders.is_empty());
-    }
-
-    #[test]
-    fn a_bare_prefix_does_not_search() {
-        let mut launcher = launcher_with_results(0);
-
-        let _ = launcher.change_query("~".to_owned());
-
-        assert!(
-            launcher
-                .folder_query
-                .as_ref()
-                .is_some_and(|query| query.is_empty())
-        );
-        assert!(launcher.folders.is_empty());
-        assert_eq!(launcher.selectable_count(), 0);
     }
 }

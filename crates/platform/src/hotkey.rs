@@ -65,12 +65,11 @@ pub fn start(initial: HotkeyChoice) -> HotkeyStatus {
         return HotkeyStatus::Unavailable;
     }
 
-    match receiver.recv_timeout(CHANGE_TIMEOUT) {
-        Ok(status) => status,
-        Err(_) => {
-            STATUS.store(HotkeyStatus::Unavailable as u8, Ordering::Relaxed);
-            HotkeyStatus::Unavailable
-        }
+    if let Ok(status) = receiver.recv_timeout(CHANGE_TIMEOUT) {
+        status
+    } else {
+        STATUS.store(HotkeyStatus::Unavailable as u8, Ordering::Relaxed);
+        HotkeyStatus::Unavailable
     }
 }
 
@@ -118,7 +117,9 @@ pub async fn set(choice: HotkeyChoice) -> HotkeyStatus {
 }
 
 fn pending() -> MutexGuard<'static, Option<(HotkeyChoice, oneshot::Sender<HotkeyStatus>)>> {
-    PENDING.lock().unwrap_or_else(|poison| poison.into_inner())
+    PENDING
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn hotkey_thread(initial: HotkeyChoice, sender: mpsc::Sender<HotkeyStatus>) {
@@ -126,7 +127,7 @@ fn hotkey_thread(initial: HotkeyChoice, sender: mpsc::Sender<HotkeyStatus>) {
     // a later `PostThreadMessageW` cannot race the first `GetMessageW`.
     let mut queue_message = MSG::default();
     unsafe {
-        let _ = PeekMessageW(&mut queue_message, None, 0, 0, PM_NOREMOVE);
+        let _ = PeekMessageW(&raw mut queue_message, None, 0, 0, PM_NOREMOVE);
     }
     THREAD_ID.store(unsafe { GetCurrentThreadId() }, Ordering::Relaxed);
 
@@ -150,27 +151,35 @@ fn hotkey_thread(initial: HotkeyChoice, sender: mpsc::Sender<HotkeyStatus>) {
     let mut message = MSG::default();
 
     loop {
-        let result = unsafe { GetMessageW(&mut message, None, 0, 0) };
+        let result = unsafe { GetMessageW(&raw mut message, None, 0, 0) };
 
         if result.0 <= 0 {
             break;
         }
 
-        if message.message == WM_HOTKEY && message.wParam.0 as i32 == HOTKEY_ID {
-            request_toggle();
-        } else if message.message == CHANGE_HOTKEY_MESSAGE {
-            let request = pending().take();
+        // A panic in one dispatch must not stop the hotkey thread; log it and
+        // keep pumping messages so the launcher stays reachable.
+        let handled = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if message.message == WM_HOTKEY && message.wParam.0 as i32 == HOTKEY_ID {
+                request_toggle();
+            } else if message.message == CHANGE_HOTKEY_MESSAGE {
+                let request = pending().take();
 
-            if let Some((choice, reply)) = request {
-                let status = change(&mut current, &mut registered, choice);
-                STATUS.store(status as u8, Ordering::Relaxed);
-                let _ = reply.send(status);
+                if let Some((choice, reply)) = request {
+                    let status = change(&mut current, &mut registered, choice);
+                    STATUS.store(status as u8, Ordering::Relaxed);
+                    let _ = reply.send(status);
+                }
             }
-        }
 
-        unsafe {
-            let _ = TranslateMessage(&message);
-            DispatchMessageW(&message);
+            unsafe {
+                let _ = TranslateMessage(&raw const message);
+                DispatchMessageW(&raw const message);
+            }
+        }));
+
+        if handled.is_err() {
+            log("hotkey thread handler panicked; continuing");
         }
     }
 

@@ -7,11 +7,54 @@ members = [
 resolver = "3"
 
 [workspace.package]
-version = "0.10.1"
+version = "0.11.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
 repository = "https://github.com/gunungpw/pirsa"
+
+[workspace.lints.rust]
+rust_2018_idioms = { level = "warn", priority = -1 }
+unsafe_op_in_unsafe_fn = "warn"
+unused_qualifications = "warn"
+missing_debug_implementations = "warn"
+
+[workspace.lints.clippy]
+# The full pedantic group is on; the allows below cover cases where the
+# "obvious" fix would make this GUI/FFI code harder to read.
+pedantic = { level = "warn", priority = -1 }
+
+# Numeric casts are deliberate in geometry, layout, and Win32 FFI code.
+cast_possible_truncation = "allow"
+cast_possible_wrap = "allow"
+cast_sign_loss = "allow"
+cast_precision_loss = "allow"
+cast_lossless = "allow"
+
+# Long, linear iced view builders read better unsplit.
+too_many_lines = "allow"
+
+# The launcher and view models intentionally group related flags.
+struct_excessive_bools = "allow"
+
+# `use super::*` keeps the split view modules concise.
+wildcard_imports = "allow"
+
+# Concise public docs are intentional; signatures are self-describing.
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+doc_markdown = "allow"
+
+# Passing a large value by value is sometimes the natural interface.
+large_types_passed_by_value = "allow"
+needless_pass_by_value = "allow"
+
+# Building small config/summary strings with `push_str(&format!(..))` reads
+# clearer than threading `std::fmt::Write` through plain renderers.
+format_push_string = "allow"
+
+# `assert!(x.is_empty())` is more direct than `assert_eq!(x, [] as [T; 0])`.
+assert_is_empty = "allow"
 
 [workspace.dependencies]
 pirsa-core = { path = "crates/core" }
@@ -33,9 +76,11 @@ windows = { version = "0.62", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_Security",
+    "Win32_Storage_FileSystem",
     "Win32_System_Com",
     "Win32_System_LibraryLoader",
     "Win32_System_Threading",
+    "Win32_System_WindowsProgramming",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",
@@ -63,10 +108,13 @@ iced.workspace = true
 tokio.workspace = true
 
 [build-dependencies]
-winres = "0.1"
+winresource = "0.1"
 
 [profile.release]
 lto = "thin"
 codegen-units = 1
 panic = "abort"
 strip = true
+
+[lints]
+workspace = true

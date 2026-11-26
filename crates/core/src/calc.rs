@@ -30,6 +30,7 @@ pub struct CalcResult {
 ///
 /// Plain numbers are deliberately not treated as calculations so apps such as
 /// `7-Zip` or `1Password` still search normally.
+#[must_use]
 pub fn evaluate(input: &str) -> Option<CalcResult> {
     let trimmed = input.trim();
 
@@ -305,7 +306,7 @@ impl Parser {
                     has_exponent = true;
                     self.pos += 1;
 
-                    if matches!(self.peek(), Some('+') | Some('-')) {
+                    if matches!(self.peek(), Some('+' | '-')) {
                         self.pos += 1;
                     }
                 }
@@ -409,6 +410,7 @@ const ORDER_FT: &[&str] = &["m", "cm", "mm", "in", "yd", "mi", "km"];
 const ORDER_YD: &[&str] = &["m", "cm", "mm", "ft", "in", "mi", "km"];
 const ORDER_MI: &[&str] = &["km", "m", "ft", "yd", "in", "cm", "mm"];
 
+#[allow(clippy::match_same_arms)] // each unit is listed so the order table stays obvious
 fn unit_order(key: &str) -> &'static [&'static str] {
     match key {
         "mm" => ORDER_MM,

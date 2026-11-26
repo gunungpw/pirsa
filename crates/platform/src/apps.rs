@@ -211,8 +211,10 @@ fn collect_shortcuts(
             .and_then(|relative| relative.components().next_back())
             .and_then(|component| component.as_os_str().to_str())
             .filter(|category| !category.is_empty())
-            .map(|category| format!("Start Menu · {category}"))
-            .unwrap_or_else(|| "Start Menu".to_owned());
+            .map_or_else(
+                || "Start Menu".to_owned(),
+                |category| format!("Start Menu · {category}"),
+            );
 
         apps.push(AppEntry::new(
             name.to_owned(),
@@ -227,7 +229,7 @@ fn scan_apps_folder_inner() -> Result<Vec<AppEntry>, String> {
         let desktop = SHGetDesktopFolder().map_err(|error| error.to_string())?;
 
         let mut folder_pidl: *mut ITEMIDLIST = std::ptr::null_mut();
-        SHParseDisplayName(w!("shell:AppsFolder"), None, &mut folder_pidl, 0, None)
+        SHParseDisplayName(w!("shell:AppsFolder"), None, &raw mut folder_pidl, 0, None)
             .map_err(|error| error.to_string())?;
 
         if folder_pidl.is_null() {
@@ -240,7 +242,7 @@ fn scan_apps_folder_inner() -> Result<Vec<AppEntry>, String> {
 
         let mut enumerator = None;
         let flags = (SHCONTF_FOLDERS.0 | SHCONTF_NONFOLDERS.0) as u32;
-        let enumeration = folder.EnumObjects(HWND::default(), flags, &mut enumerator);
+        let enumeration = folder.EnumObjects(HWND::default(), flags, &raw mut enumerator);
 
         if enumeration.is_err() {
             return Err(format!(
@@ -348,10 +350,10 @@ fn folder_display_name(
 ) -> Option<String> {
     unsafe {
         let mut strret = STRRET::default();
-        folder.GetDisplayNameOf(pidl, flags, &mut strret).ok()?;
+        folder.GetDisplayNameOf(pidl, flags, &raw mut strret).ok()?;
 
         let mut buffer = [0_u16; 1024];
-        StrRetToBufW(&mut strret, Some(pidl), &mut buffer).ok()?;
+        StrRetToBufW(&raw mut strret, Some(pidl), &mut buffer).ok()?;
 
         let length = buffer
             .iter()

@@ -103,7 +103,13 @@ fn run_scans(receiver: Receiver<oneshot::Sender<ScanResult>>) {
 
     while let Ok(reply) = receiver.recv() {
         let started = Instant::now();
-        let result = apps::scan();
+        // A panic while talking to the shell must not kill the worker: report
+        // an empty index so the UI leaves its "indexing" state.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(apps::scan))
+            .unwrap_or_else(|_| {
+                log("shell scan panicked; returning an empty index");
+                failed_scan("the shell worker panicked")
+            });
         let count = result.apps.len();
 
         if reply.send(result).is_err() {
@@ -132,7 +138,13 @@ fn run_icons(receiver: Receiver<IconRequest>) {
         }
 
         let started = Instant::now();
-        let icons = icons::extract(&request.apps);
+        let icons = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            icons::extract(&request.apps)
+        }))
+        .unwrap_or_else(|_| {
+            log("icon extraction panicked; returning no icons");
+            Vec::new()
+        });
         let count = icons.len();
 
         if request.reply.send(icons).is_err() {

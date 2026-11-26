@@ -7,6 +7,8 @@ use crate::util;
 
 /// File name inside the launcher's data directory.
 const FILE_NAME: &str = "settings.txt";
+/// Schema version written to the file header.
+const VERSION: u32 = 1;
 
 /// A font offered by the settings window.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +47,7 @@ impl FontChoice {
 
     /// The Windows font family name. Always static so it can feed
     /// `iced::Font::with_name` directly.
+    #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
             Self::SegoeUi => "Segoe UI",
@@ -63,6 +66,7 @@ impl FontChoice {
         }
     }
 
+    #[must_use]
     pub const fn key(self) -> &'static str {
         match self {
             Self::SegoeUi => "segoe-ui",
@@ -129,6 +133,7 @@ impl ThemeChoice {
         Self::TokyoNightLight,
     ];
 
+    #[must_use]
     pub const fn key(self) -> &'static str {
         match self {
             Self::Light => "light",
@@ -145,6 +150,7 @@ impl ThemeChoice {
         }
     }
 
+    #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::Light => "Light",
@@ -206,6 +212,7 @@ impl HotkeyChoice {
         Self::CtrlAltP,
     ];
 
+    #[must_use]
     pub const fn label(self) -> &'static str {
         match self {
             Self::AltSpace => "Alt+Space",
@@ -221,6 +228,7 @@ impl HotkeyChoice {
         }
     }
 
+    #[must_use]
     pub const fn key(self) -> &'static str {
         match self {
             Self::AltSpace => "alt-space",
@@ -284,11 +292,13 @@ impl Default for Settings {
 
 impl Settings {
     /// Loads settings from `%LOCALAPPDATA%\Pirsa\settings.txt`.
+    #[must_use]
     pub fn load() -> Self {
         Self::load_from(&settings_path())
     }
 
     /// Loads settings from an explicit path.
+    #[must_use]
     pub fn load_from(path: &Path) -> Self {
         let Ok(contents) = std::fs::read_to_string(path) else {
             return Self::default();
@@ -335,6 +345,8 @@ impl Settings {
                         settings.hotkey = hotkey;
                     }
                 }
+                // `version` is reserved for future migrations and unknown keys
+                // are ignored; old files simply lack it.
                 _ => {}
             }
         }
@@ -360,7 +372,7 @@ impl Settings {
     /// Persists settings to an explicit path, replacing it atomically.
     pub fn save_to(&self, path: &Path) {
         let body = format!(
-            "font={}\napp-name-font={}\ncategory-font={}\ntheme={}\nhotkey={}\n",
+            "version={VERSION}\nfont={}\napp-name-font={}\ncategory-font={}\ntheme={}\nhotkey={}\n",
             self.font.key(),
             self.app_name_font.key(),
             self.category_font.key(),
@@ -381,9 +393,10 @@ impl Settings {
 }
 
 fn settings_path() -> PathBuf {
-    util::data_directory()
-        .map(|directory| directory.join(FILE_NAME))
-        .unwrap_or_else(|| PathBuf::from(FILE_NAME))
+    util::data_directory().map_or_else(
+        || PathBuf::from(FILE_NAME),
+        |directory| directory.join(FILE_NAME),
+    )
 }
 
 #[cfg(test)]

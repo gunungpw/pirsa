@@ -38,3 +38,30 @@ jobs:
 
       - name: Build benchmarks
         run: cargo bench --workspace --no-run
+
+  msrv:
+    name: MSRV (1.88)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust 1.88
+        uses: dtolnay/rust-toolchain@1.88
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # Verifies the declared `rust-version = "1.88"` really builds.
+      - name: Check
+        run: cargo check --workspace --all-targets --locked
+
+  supply-chain:
+    name: Supply chain
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Audit licenses, advisories, and sources
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check

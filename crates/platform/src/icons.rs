@@ -135,7 +135,7 @@ unsafe fn read_bitmap(hdc: HDC, bitmap: HBITMAP) -> Option<Icon> {
         GetObjectW(
             HGDIOBJ(bitmap.0),
             size_of::<BITMAP>() as i32,
-            Some(&mut description as *mut BITMAP as *mut c_void),
+            Some((&raw mut description).cast::<c_void>()),
         )
     };
 
@@ -168,7 +168,7 @@ unsafe fn read_bitmap(hdc: HDC, bitmap: HBITMAP) -> Option<Icon> {
             0,
             height as u32,
             Some(pixels.as_mut_ptr().cast()),
-            &mut info,
+            &raw mut info,
             DIB_RGB_COLORS,
         )
     };

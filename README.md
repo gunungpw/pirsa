@@ -30,9 +30,9 @@ of the way.
 - **Unit conversion** — type `1 inch` to see it converted to millimetres,
   centimetres, metres, feet, yards, miles and kilometres, or use
   `1 inch to cm` for a single target.
-- **Folder search** — start the query with `~` or `>` to search the folders in
-  your profile instead of the Start Menu: `~projects` finds your project folders
-  wherever they live. Enter opens the selected folder in Explorer.
+- **Folder search** — every query matches folders as well as apps: typing
+  `projects` lists your project apps and your project folders in one ranked
+  list, wherever the folders live. Enter opens the selected folder in Explorer.
 - **Real application icons** — every row shows the app's actual Windows icon,
   read from the shell for both Start Menu shortcuts and Store apps, with a
   colored initial tile only as a fallback. Icons are cached on disk, so later
@@ -146,7 +146,7 @@ footer or with **Ctrl+Q** while it is focused.
 | `Ctrl+Q` | Quit Pirsa |
 | `Ctrl+,` | Open the settings window |
 | `Esc` (Settings focused) | Close the settings window |
-| `F5` | Rescan the Start Menu |
+| `F5` | Rescan the Start Menu and rebuild the folder index |
 | Click a row | Launch that app, open that folder, or copy that calculation |
 | Drag the app-list heading | Move the window |
 | Tray icon left-click | Open Pirsa |
@@ -154,21 +154,52 @@ footer or with **Ctrl+Q** while it is focused.
 
 ## Folder search
 
-Prefix the query with `~` or `>` to search the folders in your Windows profile
-instead of the Start Menu:
+Folders are part of the normal search — there is no prefix and no separate
+mode. A query ranks apps and folders on the same scale, so typing `reports`
+lists the apps named like that and the folders named like that together:
 
 ```text
-~projects   folders whose name contains "projects"
-> invoices  same search, `>` works exactly like `~`
+reports   apps whose name matches, and folders whose name matches
 ```
 
-Results show the name and the last two folders of the path. **Enter** (or a
-click) opens the folder in Explorer.
+Folder rows show the name and the last two folders of the path, and are marked
+**Folder** on the right. Apps win score ties, so a launchable app never hides
+behind a folder of the same name. **Enter** (or a click) opens the folder in
+Explorer.
 
-The walk is bounded: six folder levels, 20,000 entries, and a 250 ms budget per
-search, and it skips shell bookkeeping folders such as `AppData`, `node_modules`,
-and `.git`. Typing pauses are debounced, and a newer query always wins over an
-older result. A bare `~` or `>` shows a hint instead of walking the disk.
+### What gets searched
+
+Folder search is driven by a scope you configure in **Settings → Folder search**:
+
+| Setting | Meaning |
+| --- | --- |
+| **Scope** | Profile only (default) · Fixed drives · All drives · Selected drives |
+| **Drives** | Tick the drives that participate; ticking one switches the scope to Selected |
+| **Extra folders** | Additional roots, added with the Windows folder picker |
+| **Excluded names or paths** | Whole names (`node_modules`), `*` globs (`temp*`), or path suffixes (`*\bin`) |
+| **Search depth** | 1–12 levels below each root |
+| **Include hidden folders** | Also index folders whose name starts with a dot |
+
+Exclusions always win over includes and drives, nested roots are deduplicated
+(`C:\` already covers `C:\Users\me\Projects`), and system locations
+(`Windows`, `Program Files`, `ProgramData`, `$Recycle.Bin`,
+`System Volume Information`) are never searched whatever the scope says.
+
+### How it stays fast
+
+The first search after the scope changes starts a background **folder index**
+(`%LOCALAPPDATA%\Pirsa\folders.index`). While it builds, the launcher shows
+progress in the settings window and searches with a bounded live walk; once the
+index is ready, queries are answered from memory. The index is cached per scope
+fingerprint, capped at 1.5 million folders, and rebuilt on demand with the
+**Rebuild** button.
+
+The live fallback walk is bounded at 20,000 entries and 250 ms, so a query never
+blocks the window. Typing pauses are debounced, and a newer query always wins
+over an older result. An empty query searches no folders at all.
+
+The index is a snapshot: folders created after a build appear in the live
+fallback only until the index is rebuilt.
 
 ## Calculator and unit conversion
 
@@ -189,7 +220,11 @@ Press ↓ to select the first app row instead.
 ## Settings
 
 Open the settings window with **Ctrl+,**, the **Settings** button in the footer,
-or the tray menu. You can change:
+or the tray menu. The window is borderless like the launcher: drag it by its
+header and close it with the **×** beside the title or the **Close** button. It
+has two columns — the categories **Appearance**, **Behavior**,
+**Folder search**, and **Preview** on the left, and the settings of the selected
+category on the right — and you can change:
 
 - **UI font** — Segoe UI, Segoe UI Variable, Arial, Calibri, Cambria, Cascadia
   Code, Cascadia Mono, Consolas, Georgia, Microsoft YaHei, Tahoma, Trebuchet MS,
@@ -203,6 +238,9 @@ or the tray menu. You can change:
   Alt+Shift+Space, Ctrl+Shift+Space, Alt+`, Ctrl+`, Alt+Q, Ctrl+Alt+Q, or
   Ctrl+Alt+P. The new hotkey is registered immediately. If Windows rejects it
   because another app already owns it, the previous hotkey stays active.
+- **Folder search** — scope, drives, extra folders, exclusions, depth, and
+  hidden-folder handling, plus the folder index state and a **Rebuild** button.
+  These persist in `%LOCALAPPDATA%\Pirsa\search.txt`.
 
 There is deliberately **no “follow system”** theme option. Changes apply to both
 windows immediately and are saved to
@@ -250,7 +288,9 @@ crates/
       lib.rs           public models and module re-exports
       model.rs         AppEntry, LaunchTarget, ScanResult, Icon, HotkeyStatus
       calc.rs          safe expression parser and length-unit conversion
-      folders.rs       `~` / `>` folder search: query parsing and ranking
+      folders.rs       folder matching and ranking
+      results.rs       the unified app + folder result list
+      search_scope.rs  drives/includes/excludes/depth, `search.txt` persistence
       search.rs        fuzzy ranking with unit tests
       settings.rs      font/theme/hotkey choices and persistent settings
       usage.rs         persistent launch history
@@ -259,12 +299,15 @@ crates/
     src/
       lib.rs           startup, shared request flags, platform re-exports
       com.rs           RAII STA COM apartment guard
+      drives.rs        drive enumeration (letters, kinds, labels, free space)
+      folder_index.rs  persistent folder index, cache, background builder
+      folder_picker.rs native folder picker for the search scope
       hotkey.rs        global hotkey via RegisterHotKey, changeable at runtime
       instance.rs      named mutex + named show/quit events
       shell.rs         dedicated shell workers for scans and icons
       tray.rs          notification-area icon and menu
       apps.rs          Start Menu and AppsFolder scanning, ShellExecute
-      folders.rs       bounded profile walk behind `~` / `>`, ShellExecute open
+      folders.rs       bounded multi-root walk, ShellExecute open
       icons.rs         real app icon extraction via IShellItemImageFactory
       window.rs        show/hide, focus, monitor enumeration
       window_memory.rs per-monitor placement memory (`window.txt`)

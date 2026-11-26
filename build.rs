@@ -3,7 +3,7 @@
 
     #[cfg(windows)]
     {
-        let mut resources = winres::WindowsResource::new();
+        let mut resources = winresource::WindowsResource::new();
         resources.set_icon("assets/icon.ico");
         resources.set("ProductName", "Pirsa");
         resources.set("FileDescription", "Pirsa");

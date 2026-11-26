@@ -10,7 +10,21 @@ use crate::util::SearchText;
 /// With an empty query, frequently used apps move to the front while
 /// everything else keeps its Start Menu order. Search keeps its usual scoring
 /// and only lets usage decide close matches.
+#[must_use]
 pub fn rank_with_usage(apps: &[AppEntry], query: &str, usage: &Usage) -> Vec<usize> {
+    rank_scores(apps, query, usage)
+        .into_iter()
+        .map(|(_, index)| index)
+        .collect()
+}
+
+/// Application matches with their scores, best first.
+///
+/// The scores use the same tiers as [`crate::folders::rank_scores`] — exact
+/// 2000, prefix 1500, substring 1050, then the weaker acronym and subsequence
+/// matches — so [`crate::results::merge`] can interleave apps and folders into
+/// one list.
+pub fn rank_scores(apps: &[AppEntry], query: &str, usage: &Usage) -> Vec<(i32, usize)> {
     let query = SearchText::new(query);
 
     if query.is_empty() {
@@ -22,7 +36,7 @@ pub fn rank_with_usage(apps: &[AppEntry], query: &str, usage: &Usage) -> Vec<usi
         .split_whitespace()
         .map(SearchText::new)
         .collect();
-    let mut matches = Vec::with_capacity(apps.len());
+    let mut hits = Vec::with_capacity(apps.len());
 
     for (index, app) in apps.iter().enumerate() {
         let name = app.name_search();
@@ -40,15 +54,12 @@ pub fn rank_with_usage(apps: &[AppEntry], query: &str, usage: &Usage) -> Vec<usi
                 .map(|score| score + 40)
                 .or_else(|| score_name(detail, token));
 
-            match token_score {
-                Some(token_score) => {
-                    score += token_score;
-                    matched = true;
-                }
-                None => {
-                    matched = false;
-                    break;
-                }
+            if let Some(token_score) = token_score {
+                score += token_score;
+                matched = true;
+            } else {
+                matched = false;
+                break;
             }
         }
 
@@ -61,10 +72,10 @@ pub fn rank_with_usage(apps: &[AppEntry], query: &str, usage: &Usage) -> Vec<usi
         let usage_entry = usage.entry(name.normalized());
         score -= (name.len() as i32).min(40);
         score += usage_entry.score_bonus();
-        matches.push((score, name.len(), index, usage_entry));
+        hits.push((score, name.len(), index, usage_entry));
     }
 
-    matches.sort_by(|left, right| {
+    hits.sort_by(|left, right| {
         right
             .0
             .cmp(&left.0)
@@ -74,14 +85,16 @@ pub fn rank_with_usage(apps: &[AppEntry], query: &str, usage: &Usage) -> Vec<usi
             .then_with(|| apps[left.2].name().cmp(apps[right.2].name()))
     });
 
-    matches.into_iter().map(|(_, _, index, _)| index).collect()
+    hits.into_iter()
+        .map(|(score, _, index, _)| (score, index))
+        .collect()
 }
 
 /// Orders every app with the most-used ones first.
 ///
 /// `sort_by` is stable, so apps without history keep the Start Menu order
 /// (alphabetical) they were indexed with.
-fn popular(apps: &[AppEntry], usage: &Usage) -> Vec<usize> {
+fn popular(apps: &[AppEntry], usage: &Usage) -> Vec<(i32, usize)> {
     let mut ranked: Vec<(usize, UsageEntry)> = apps
         .iter()
         .enumerate()
@@ -96,7 +109,8 @@ fn popular(apps: &[AppEntry], usage: &Usage) -> Vec<usize> {
             .then_with(|| right.1.last_used.cmp(&left.1.last_used))
     });
 
-    ranked.into_iter().map(|(index, _)| index).collect()
+    // Every app ties at zero: the list is ordered by usage alone.
+    ranked.into_iter().map(|(index, _)| (0, index)).collect()
 }
 
 fn score_name(text: &SearchText, query: &SearchText) -> Option<i32> {

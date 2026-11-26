@@ -16,3 +16,6 @@ iced.workspace = true
 
 [dev-dependencies]
 iced_tester = "0.14"
+
+[lints]
+workspace = true

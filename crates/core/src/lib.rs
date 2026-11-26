@@ -7,13 +7,17 @@
 pub mod calc;
 pub mod folders;
 pub mod model;
+pub mod results;
 pub mod search;
+pub mod search_scope;
 pub mod settings;
 pub mod usage;
 pub mod util;
 
 pub use calc::{CalcKind, CalcResult};
-pub use folders::{FolderEntry, FolderQuery};
+pub use folders::FolderEntry;
 pub use model::{AppEntry, HotkeyStatus, Icon, LaunchTarget, ScanResult};
+pub use results::ResultRow;
+pub use search_scope::{DriveInfo, DriveKind, DriveMode, SearchScope};
 pub use settings::{FontChoice, HotkeyChoice, Settings, ThemeChoice};
 pub use usage::Usage;

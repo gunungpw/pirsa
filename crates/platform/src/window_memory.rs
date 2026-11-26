@@ -11,6 +11,8 @@ use std::path::PathBuf;
 use pirsa_core::util::{data_directory, log};
 
 const FILE_NAME: &str = "window.txt";
+/// Schema version written to the file header.
+const VERSION: u32 = 1;
 
 /// A monitor's usable area in physical pixels.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -72,6 +74,10 @@ impl Memory {
 
             let key = key.trim();
 
+            if key == "version" {
+                continue;
+            }
+
             if key == "last" {
                 let value = value.trim();
 
@@ -98,7 +104,7 @@ impl Memory {
 
     /// Serializes to a stable, line-based format.
     pub fn render(&self) -> String {
-        let mut body = String::new();
+        let mut body = format!("version={VERSION}\n");
 
         if let Some(last) = &self.last {
             body.push_str(&format!("last={last}\n"));

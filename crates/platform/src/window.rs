@@ -19,11 +19,11 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     BringWindowToTop, GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId, HWND_NOTOPMOST,
-    HWND_TOPMOST, IsWindowVisible, SW_HIDE, SW_SHOWNORMAL, SWP_HIDEWINDOW, SWP_NOACTIVATE,
-    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SetForegroundWindow, SetWindowPos,
-    ShowWindow, SwitchToThisWindow,
+    HWND_TOPMOST, IsWindowVisible, MB_ICONERROR, MB_OK, MB_SETFOREGROUND, MessageBoxW, SW_HIDE,
+    SW_SHOWNORMAL, SWP_HIDEWINDOW, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    SWP_SHOWWINDOW, SetForegroundWindow, SetWindowPos, ShowWindow, SwitchToThisWindow,
 };
-use windows::core::BOOL;
+use windows::core::{BOOL, HSTRING};
 
 use pirsa_core::util::log;
 
@@ -33,6 +33,26 @@ static PREVIOUS_FOREGROUND: AtomicIsize = AtomicIsize::new(0);
 
 fn hwnd(raw: isize) -> HWND {
     HWND(raw as *mut c_void)
+}
+
+/// Shows a blocking native error dialog.
+///
+/// The release profile aborts on panic, so the panic hook calls this to make a
+/// crash visible instead of letting the launcher disappear silently.
+pub fn show_fatal_error(message: &str) {
+    let text = HSTRING::from(message);
+    let caption = HSTRING::from("Pirsa");
+
+    // SAFETY: `MessageBoxW` only reads the two strings for the lifetime of the
+    // call, and both `HSTRING`s outlive it.
+    unsafe {
+        MessageBoxW(
+            None,
+            &text,
+            &caption,
+            MB_OK | MB_ICONERROR | MB_SETFOREGROUND,
+        );
+    }
 }
 
 /// Shows the launcher at its remembered position and foregrounds it.
@@ -82,6 +102,7 @@ pub fn show(raw: isize) -> bool {
 }
 
 /// Reasserts foreground focus for an already visible launcher.
+#[must_use]
 pub fn focus(raw: isize) -> bool {
     let hwnd = hwnd(raw);
 
@@ -172,11 +193,13 @@ pub fn hide(raw: isize) -> bool {
     }
 }
 
+#[must_use]
 pub fn is_visible(raw: isize) -> bool {
     let hwnd = hwnd(raw);
     !hwnd.0.is_null() && unsafe { IsWindowVisible(hwnd).as_bool() }
 }
 
+#[must_use]
 pub fn is_foreground(raw: isize) -> bool {
     let hwnd = hwnd(raw);
     !hwnd.0.is_null() && unsafe { GetForegroundWindow() == hwnd }
@@ -244,7 +267,7 @@ fn move_to(hwnd: HWND, x: i32, y: i32) {
 
 fn window_rect(hwnd: HWND) -> Option<RECT> {
     let mut rect = RECT::default();
-    unsafe { GetWindowRect(hwnd, &mut rect).ok()? };
+    unsafe { GetWindowRect(hwnd, &raw mut rect).ok()? };
     Some(rect)
 }
 
@@ -267,9 +290,9 @@ fn foreground_area() -> Option<WorkArea> {
 /// Reads a monitor's device name and work area.
 fn monitor_area(monitor: HMONITOR) -> Option<WorkArea> {
     let mut info = MONITORINFOEXW::default();
-    info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+    info.monitorInfo.cbSize = size_of::<MONITORINFOEXW>() as u32;
 
-    let ok = unsafe { GetMonitorInfoW(monitor, &mut info.monitorInfo) };
+    let ok = unsafe { GetMonitorInfoW(monitor, &raw mut info.monitorInfo) };
 
     if !ok.as_bool() {
         return None;
@@ -292,7 +315,7 @@ fn work_areas() -> Vec<WorkArea> {
             None,
             None,
             Some(collect_monitor),
-            LPARAM(&mut areas as *mut Vec<WorkArea> as isize),
+            LPARAM(&raw mut areas as isize),
         );
     }
 
