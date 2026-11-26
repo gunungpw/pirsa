@@ -82,6 +82,36 @@ impl SearchText {
     }
 }
 
+/// Start Menu entries that are support material rather than applications.
+const NOISE_WORDS: &[&str] = &[
+    "uninstall",
+    "readme",
+    "help",
+    "documentation",
+    "manual",
+    "release notes",
+    "changelog",
+    "license",
+    "website",
+    "support",
+    "repair",
+    "modify",
+    "remove",
+];
+
+/// Whether a normalized shortcut name is shell noise rather than an app.
+///
+/// Only whole leading words count, so "Helper" and "Removeable Drive" survive
+/// while "Help", "Readme.txt" and "Uninstall Steam" are filtered out.
+pub fn is_noise_name(normalized: &str) -> bool {
+    NOISE_WORDS.iter().any(|word| {
+        normalized == *word
+            || normalized
+                .strip_prefix(word)
+                .is_some_and(|rest| rest.starts_with(' '))
+    })
+}
+
 /// Appends a line to the launcher log. Logging is best-effort and must never
 /// take the launcher down.
 pub fn log(message: impl AsRef<str>) {
@@ -161,6 +191,20 @@ mod tests {
         assert_eq!(normalize_name("Code::Blocks"), "code blocks");
         assert_eq!(normalize_name("Café"), "café");
         assert_eq!(normalize_name("!!!"), "");
+    }
+
+    #[test]
+    fn shell_noise_is_filtered_by_whole_word() {
+        assert!(is_noise_name("uninstall steam"));
+        assert!(is_noise_name("help"));
+        assert!(is_noise_name("readme txt"));
+        assert!(is_noise_name("release notes"));
+        assert!(is_noise_name("modify installation"));
+
+        assert!(!is_noise_name("helper"));
+        assert!(!is_noise_name("removeable drive"));
+        assert!(!is_noise_name("notepad"));
+        assert!(!is_noise_name("visual studio code"));
     }
 
     #[test]

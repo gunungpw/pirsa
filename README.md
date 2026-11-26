@@ -30,11 +30,16 @@ of the way.
 - **Unit conversion** — type `1 inch` to see it converted to millimetres,
   centimetres, metres, feet, yards, miles and kilometres, or use
   `1 inch to cm` for a single target.
+- **File and folder search** — start the query with `~` or `>` to search your
+  profile instead of the Start Menu: `~report` finds `report.txt` wherever it
+  lives. Files open with their default app; folders open in Explorer.
 - **Real application icons** — every row shows the app's actual Windows icon,
   read from the shell for both Start Menu shortcuts and Store apps, with a
   colored initial tile only as a fallback. Icons are cached on disk, so later
   launches only ask the shell about new or updated apps.
-- **Keyboard-first** — arrow keys to move, Enter to launch, Esc to hide.
+- **Keyboard-first** — arrow keys to move, Enter to launch, **Ctrl+1…8** to
+  launch a row directly, **Tab** for Settings, Esc to hide. Uninstallers,
+  readmes, and website shortcuts are filtered out of the app list.
 - **One instance** — launching `pirsa.exe` again reveals the running launcher
   instead of starting a second copy.
 - **Tray icon** — left-click it to open Pirsa; right-click for **Open**,
@@ -134,16 +139,37 @@ footer or with **Ctrl+Q** while it is focused.
 | --- | --- |
 | `Alt+Space` (default) | Open or hide the launcher; configurable in Settings |
 | `↑` / `↓` | Move the selection (the calculation card comes first) |
-| `Enter` | Copy the selected calculation, or launch the selected app |
+| `Enter` | Copy the selected calculation, launch the selected app, or open the selected file |
+| `Ctrl+1` … `Ctrl+8` | Launch the nth app row (or open the nth file result) |
+| `Tab` | Open the settings window |
 | `Esc` | Hide the launcher |
 | `Ctrl+Q` | Quit Pirsa |
 | `Ctrl+,` | Open the settings window |
 | `Esc` (Settings focused) | Close the settings window |
 | `F5` | Rescan the Start Menu |
-| Click a row | Launch that app or copy that calculation |
+| Click a row | Launch that app, open that file, or copy that calculation |
 | Drag the app-list heading | Move the window |
 | Tray icon left-click | Open Pirsa |
 | Tray icon right-click | Open, Settings, or quit Pirsa |
+
+## File and folder search
+
+Prefix the query with `~` or `>` to search the files and folders in your Windows
+profile instead of the Start Menu:
+
+```text
+~report      files and folders whose name contains "report"
+> invoices   same search, `>` works exactly like `~`
+```
+
+Results show the name, the last two folders of the path, and whether the entry
+is a **File** or a **Folder**. **Enter** (or a click) opens it with its default
+handler — folders open in Explorer.
+
+The walk is bounded: six folder levels, 20,000 entries, and a 250 ms budget per
+search, and it skips shell bookkeeping folders such as `AppData`, `node_modules`,
+and `.git`. Typing pauses are debounced, and a newer query always wins over an
+older result. A bare `~` or `>` shows a hint instead of walking the disk.
 
 ## Calculator and unit conversion
 
@@ -192,8 +218,11 @@ At startup Pirsa scans:
 3. The Windows `shell:AppsFolder` namespace via the Shell COM API
 
 Shortcuts are de-duplicated by display name, with Start Menu `.lnk`/`.url` files
-taking precedence. Store apps are launched through their AppUserModelID; desktop
-apps are launched through their shortcut or executable path.
+taking precedence. Support entries that are not applications — uninstallers,
+readmes, help files, release notes, licence files, and website shortcuts — are
+filtered out by whole-word match, so "Helper" and "Removeable Drive" survive.
+Store apps are launched through their AppUserModelID; desktop apps are launched
+through their shortcut or executable path.
 
 On a typical development machine this indexes 140+ apps in well under a second.
 The scan runs on a dedicated STA worker thread, so the window appears while it
@@ -222,10 +251,11 @@ crates/
       lib.rs           public models and module re-exports
       model.rs         AppEntry, LaunchTarget, ScanResult, Icon, HotkeyStatus
       calc.rs          safe expression parser and length-unit conversion
+      files.rs         `~` / `>` file search: query parsing and ranking
       search.rs        fuzzy ranking with unit tests
       settings.rs      font/theme/hotkey choices and persistent settings
       usage.rs         persistent launch history
-      util.rs          normalization, SearchText, logging
+      util.rs          normalization, SearchText, noise filter, logging
   platform/            Windows-specific integration (no iced)
     src/
       lib.rs           startup, shared request flags, platform re-exports
@@ -235,13 +265,17 @@ crates/
       shell.rs         dedicated shell workers for scans and icons
       tray.rs          notification-area icon and menu
       apps.rs          Start Menu and AppsFolder scanning, ShellExecute
+      files.rs         bounded profile walk behind `~` / `>`, ShellExecute open
       icons.rs         real app icon extraction via IShellItemImageFactory
-      window.rs        show/hide, centering, foreground handling
+      window.rs        show/hide, focus, monitor enumeration
+      window_memory.rs per-monitor placement memory (`window.txt`)
   ui/                  iced view layer (no direct Windows or FFI code)
     src/lib.rs         launcher/settings views, theme colors, widget styles
 src/
   main.rs              iced daemon bootstrap
-  app.rs               launcher state, settings window, ViewModel implementation
+  app.rs               launcher state, settings window, file mode, view state
+crates/core/benches/rank.rs  criterion benchmark for the search ranking
+.github/workflows/ci.yml     fmt, clippy, tests, and benchmark build
 assets/
   andrsrxn--app-window.svg  source window glyph
   pirsa-icon.svg            transparent Teal Light app icon

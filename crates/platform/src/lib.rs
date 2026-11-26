@@ -12,13 +12,16 @@ use tokio::sync::Notify;
 
 mod apps;
 mod com;
+mod files;
 mod hotkey;
 mod icons;
 mod instance;
 mod shell;
 mod tray;
+mod window_memory;
 
 pub use apps::launch;
+pub use files::{open_path, search_async as search_files};
 pub use hotkey::status as hotkey_status;
 pub use shell::{extract_icons, scan};
 

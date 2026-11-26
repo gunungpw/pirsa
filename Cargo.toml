@@ -7,7 +7,7 @@ members = [
 resolver = "3"
 
 [workspace.package]
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT"
@@ -25,6 +25,7 @@ iced = { version = "0.14", default-features = false, features = [
     "image-without-codecs",
 ] }
 tokio = { version = "1", default-features = false, features = [
+    "rt",
     "sync",
     "time",
 ] }

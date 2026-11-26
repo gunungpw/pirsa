@@ -11,6 +11,7 @@ use iced::widget::operation;
 use iced::{Element, Event, Font, Subscription, Task, Theme, window};
 
 use pirsa_core::calc::{self, CalcResult};
+use pirsa_core::files::{self as file_index, FileEntry, FileQuery};
 use pirsa_core::search;
 use pirsa_core::settings::{HotkeyChoice, Settings, ThemeChoice};
 use pirsa_core::usage::Usage;
@@ -29,6 +30,11 @@ pub struct Launcher {
     pub(crate) usage: Usage,
     /// Real application icons, keyed by display name.
     pub(crate) icons: HashMap<String, Handle>,
+    /// Matches of the current `~` / `>` filesystem query.
+    pub(crate) files: Vec<FileEntry>,
+    pub(crate) file_results: Vec<usize>,
+    /// Present while the search field holds a file-mode query.
+    pub(crate) file_query: Option<FileQuery>,
     pub(crate) settings: Settings,
     pub(crate) theme: Theme,
     pub(crate) query: String,
@@ -48,6 +54,8 @@ pub struct Launcher {
     pub(crate) indexing: bool,
     /// Set when F5 arrives while a scan is running; runs once the scan lands.
     pub(crate) rescan_queued: bool,
+    /// Monotonic token for the newest file search; older results are discarded.
+    pub(crate) file_generation: u64,
     /// Monotonic token for the newest scan; older results are discarded.
     pub(crate) scan_generation: u64,
     /// Monotonic token for the newest icon batch; older results are discarded.
@@ -75,6 +83,11 @@ pub enum Message {
         choice: HotkeyChoice,
         status: HotkeyStatus,
     },
+    /// Result of a `~` / `>` filesystem search.
+    FileSearchComplete {
+        generation: u64,
+        files: Vec<FileEntry>,
+    },
     Event(window::Id, Event),
 }
 
@@ -87,6 +100,9 @@ impl Launcher {
             calc: None,
             usage: Usage::load(),
             icons: HashMap::new(),
+            files: Vec::new(),
+            file_results: Vec::new(),
+            file_query: None,
             settings,
             theme,
             query: String::new(),
@@ -103,6 +119,7 @@ impl Launcher {
             warning: None,
             indexing: true,
             rescan_queued: false,
+            file_generation: 0,
             scan_generation: 0,
             icon_generation: 0,
         };
@@ -164,6 +181,16 @@ impl Launcher {
 
                 Task::none()
             }
+            Message::FileSearchComplete { generation, files } => {
+                if generation != self.file_generation {
+                    return Task::none();
+                }
+
+                self.files = files;
+                self.recompute();
+
+                Task::none()
+            }
             Message::WindowReady(id, hwnd) => {
                 self.window_id = Some(id);
                 self.hwnd = Some(hwnd);
@@ -190,22 +217,8 @@ impl Launcher {
 
     fn update_ui(&mut self, message: ui::Message) -> Task<Message> {
         match message {
-            ui::Message::QueryChanged(query) => {
-                self.query = query;
-                self.calc = calc::evaluate(&self.query);
-                self.error = None;
-                self.recompute();
-                self.selected = 0;
-                Task::none()
-            }
-            ui::Message::ClearQuery => {
-                self.query.clear();
-                self.calc = None;
-                self.error = None;
-                self.recompute();
-                self.selected = 0;
-                Task::none()
-            }
+            ui::Message::QueryChanged(query) => self.change_query(query),
+            ui::Message::ClearQuery => self.clear_query(),
             ui::Message::Navigate(delta) => {
                 let total = self.selectable_count();
 
@@ -221,6 +234,7 @@ impl Launcher {
                 Task::none()
             }
             ui::Message::Activate(key) => self.activate(&key),
+            ui::Message::ActivateFile(path) => self.open_path(&path),
             ui::Message::CopyCalc => self.copy_calc(),
             ui::Message::OpenSettings => self.open_settings(),
             ui::Message::Quit => iced::exit(),
@@ -229,6 +243,62 @@ impl Launcher {
                 .map(window::drag::<Message>)
                 .unwrap_or_else(Task::none),
         }
+    }
+
+    fn change_query(&mut self, query: String) -> Task<Message> {
+        self.query = query;
+        self.calc = calc::evaluate(&self.query);
+        self.file_query = file_index::parse_query(&self.query);
+        self.error = None;
+
+        if self.file_query.is_none() {
+            self.files.clear();
+            self.file_results.clear();
+        }
+
+        self.recompute();
+        self.selected = 0;
+
+        match &self.file_query {
+            Some(file_query) if !file_query.is_empty() => {
+                self.begin_file_search(file_query.term().to_owned())
+            }
+            Some(_) => {
+                // A bare `~` or `>` shows the hint instead of walking the disk.
+                self.files.clear();
+                self.file_results.clear();
+                Task::none()
+            }
+            None => Task::none(),
+        }
+    }
+
+    fn clear_query(&mut self) -> Task<Message> {
+        self.query.clear();
+        self.calc = None;
+        self.file_query = None;
+        self.files.clear();
+        self.file_results.clear();
+        self.error = None;
+        self.recompute();
+        self.selected = 0;
+        Task::none()
+    }
+
+    /// Starts a debounced filesystem walk; stale results are dropped.
+    fn begin_file_search(&mut self, term: String) -> Task<Message> {
+        self.file_generation = self.file_generation.wrapping_add(1);
+        let generation = self.file_generation;
+
+        Task::perform(
+            async move {
+                // A burst of keystrokes should walk the profile once, not once
+                // per character.
+                tokio::time::sleep(Duration::from_millis(140)).await;
+                platform::search_files(term).await
+            },
+            move |files| Message::FileSearchComplete { generation, files },
+        )
     }
 
     fn update_settings(&mut self, message: ui::SettingsMessage) -> Task<Message> {
@@ -308,16 +378,26 @@ impl Launcher {
 
     /// Borrows the read-only slice of state the launcher view renders.
     fn view_state(&self) -> ui::ViewState<'_> {
+        let file_mode = self.file_query.is_some();
+
         ui::ViewState {
             apps: &self.apps,
             results: &self.results,
             calc: self.calc.as_ref(),
             icons: &self.icons,
+            files: &self.files,
+            file_results: &self.file_results,
+            file_term: self.file_query.as_ref().map(|query| query.term()),
             query: &self.query,
             selected: self.selected,
             hotkey: self.hotkey,
             hotkey_choice: self.settings.hotkey,
-            error: self.error.as_deref(),
+            // The "no apps indexed" error is irrelevant while searching files.
+            error: if file_mode {
+                None
+            } else {
+                self.error.as_deref()
+            },
             warning: self.warning.as_deref(),
             indexing: self.indexing,
             result_limit: self.result_limit(),
@@ -489,6 +569,10 @@ impl Launcher {
     }
 
     fn activate_selected(&mut self) -> Task<Message> {
+        if self.file_query.is_some() {
+            return self.open_file(self.selected);
+        }
+
         let position = if self.calc.is_some() {
             if self.selected == 0 {
                 return self.copy_calc();
@@ -499,6 +583,11 @@ impl Launcher {
             self.selected
         };
 
+        self.activate_position(position)
+    }
+
+    /// Launches the app row at `position` in the result list.
+    fn activate_position(&mut self, position: usize) -> Task<Message> {
         let Some(&index) = self.results.get(position) else {
             return Task::none();
         };
@@ -509,6 +598,48 @@ impl Launcher {
 
         let key = app.search_key().to_owned();
         self.activate(&key)
+    }
+
+    /// `Ctrl+1` … `Ctrl+8` launch the nth row visible to the user.
+    fn activate_number(&mut self, number: usize) -> Task<Message> {
+        let position = number.saturating_sub(1);
+
+        if self.file_query.is_some() {
+            return self.open_file(position);
+        }
+
+        // App rows start after the calculation card when one is visible.
+        self.activate_position(position + usize::from(self.calc.is_some()))
+    }
+
+    /// Opens the file result at `position`.
+    fn open_file(&mut self, position: usize) -> Task<Message> {
+        let Some(&index) = self.file_results.get(position) else {
+            return Task::none();
+        };
+
+        let Some(file) = self.files.get(index) else {
+            return Task::none();
+        };
+
+        let path = file.path().to_path_buf();
+        self.open_path(&path)
+    }
+
+    fn open_path(&mut self, path: &std::path::Path) -> Task<Message> {
+        if let Err(error) = platform::open_path(path) {
+            let name = path
+                .file_name()
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_else(|| path.display().to_string());
+
+            self.error = Some(format!("Could not open {name}: {error}"));
+            util::log(format!("open failed for {}: {error}", path.display()));
+
+            return Task::none();
+        }
+
+        self.hide()
     }
 
     fn copy_calc(&mut self) -> Task<Message> {
@@ -625,7 +756,13 @@ impl Launcher {
     }
 
     fn recompute(&mut self) {
-        self.results = search::rank_with_usage(&self.apps, &self.query, &self.usage);
+        if let Some(file_query) = &self.file_query {
+            self.file_results = file_index::rank(&self.files, file_query.term());
+            self.results.clear();
+        } else {
+            self.results = search::rank_with_usage(&self.apps, &self.query, &self.usage);
+            self.file_results.clear();
+        }
 
         let selectable = self.selectable_count();
 
@@ -634,17 +771,23 @@ impl Launcher {
         }
     }
 
-    /// Number of app rows that fit while a calculation card is visible.
+    /// Number of rows that fit on screen in the current mode.
     pub(crate) fn result_limit(&self) -> usize {
-        if self.calc.is_some() {
+        if self.file_query.is_some() {
+            ui::MAX_RESULTS
+        } else if self.calc.is_some() {
             ui::MAX_RESULTS_WITH_CALC
         } else {
             ui::MAX_RESULTS
         }
     }
 
-    /// Calculation card first, then the visible app rows.
+    /// Calculation card first, then the visible app or file rows.
     fn selectable_count(&self) -> usize {
+        if self.file_query.is_some() {
+            return self.file_results.len().min(self.result_limit());
+        }
+
         self.results.len().min(self.result_limit()) + usize::from(self.calc.is_some())
     }
 
@@ -714,7 +857,20 @@ impl Launcher {
             return self.open_settings();
         }
 
+        // Ctrl+1 … Ctrl+8 launch the nth row.
+        if modifiers.control()
+            && let Key::Character(character) = &key
+            && let Some(digit) = character
+                .chars()
+                .next()
+                .and_then(|value| value.to_digit(10))
+            && (1..=8).contains(&digit)
+        {
+            return self.activate_number(digit as usize);
+        }
+
         match key {
+            Key::Named(Named::Tab) => self.open_settings(),
             Key::Named(Named::Escape) => self.hide(),
             Key::Named(Named::ArrowUp) => self.update(Message::Ui(ui::Message::Navigate(-1))),
             Key::Named(Named::ArrowDown) => self.update(Message::Ui(ui::Message::Navigate(1))),
@@ -818,6 +974,9 @@ mod tests {
             calc: None,
             usage: Usage::default(),
             icons: HashMap::new(),
+            files: Vec::new(),
+            file_results: Vec::new(),
+            file_query: None,
             settings: Settings::default(),
             theme: theme_from_choice(ThemeChoice::Dark),
             query: String::new(),
@@ -834,6 +993,7 @@ mod tests {
             warning: None,
             indexing: false,
             rescan_queued: false,
+            file_generation: 0,
             scan_generation: 0,
             icon_generation: 0,
         }
@@ -970,5 +1130,98 @@ mod tests {
 
         let _ = launcher.update(Message::Ui(ui::Message::Navigate(-100)));
         assert_eq!(launcher.selected, 0);
+    }
+
+    fn file_entry(path: &str, is_dir: bool) -> FileEntry {
+        let path = std::path::PathBuf::from(path);
+        let name = path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_default();
+
+        FileEntry::new(path, name, is_dir)
+    }
+
+    #[test]
+    fn tilde_query_enters_file_mode() {
+        let mut launcher = launcher_with_results(3);
+
+        let _ = launcher.change_query("~report".to_owned());
+
+        assert!(launcher.file_query.is_some());
+        assert!(launcher.results.is_empty());
+        assert_eq!(launcher.result_limit(), ui::MAX_RESULTS);
+    }
+
+    #[test]
+    fn a_plain_query_leaves_file_mode() {
+        let mut launcher = launcher_with_results(0);
+
+        let _ = launcher.change_query("~report".to_owned());
+        launcher
+            .files
+            .push(file_entry("C:\\Users\\me\\report.txt", false));
+
+        let _ = launcher.change_query("note".to_owned());
+
+        assert!(launcher.file_query.is_none());
+        assert!(launcher.files.is_empty());
+        assert!(launcher.file_results.is_empty());
+    }
+
+    #[test]
+    fn file_results_rank_and_count_toward_selection() {
+        let mut launcher = launcher_with_results(0);
+
+        let _ = launcher.change_query("~report".to_owned());
+        let generation = launcher.file_generation;
+
+        let _ = launcher.update(Message::FileSearchComplete {
+            generation,
+            files: vec![
+                file_entry("C:\\Users\\me\\old-report.txt", false),
+                file_entry("C:\\Users\\me\\notes.txt", false),
+                file_entry("C:\\Users\\me\\report.txt", false),
+            ],
+        });
+
+        // "report.txt" (prefix match) outranks "old-report.txt" (substring).
+        assert_eq!(launcher.file_results, vec![2, 0]);
+        assert_eq!(launcher.selectable_count(), 2);
+
+        let _ = launcher.update(Message::Ui(ui::Message::Navigate(100)));
+        assert_eq!(launcher.selected, 1);
+    }
+
+    #[test]
+    fn stale_file_searches_are_ignored() {
+        let mut launcher = launcher_with_results(0);
+
+        let _ = launcher.change_query("~report".to_owned());
+        let stale = launcher.file_generation;
+
+        let _ = launcher.change_query("~report2".to_owned());
+        let _ = launcher.update(Message::FileSearchComplete {
+            generation: stale,
+            files: vec![file_entry("C:\\Users\\me\\report.txt", false)],
+        });
+
+        assert!(launcher.files.is_empty());
+    }
+
+    #[test]
+    fn a_bare_prefix_does_not_search() {
+        let mut launcher = launcher_with_results(0);
+
+        let _ = launcher.change_query("~".to_owned());
+
+        assert!(
+            launcher
+                .file_query
+                .as_ref()
+                .is_some_and(|query| query.is_empty())
+        );
+        assert!(launcher.files.is_empty());
+        assert_eq!(launcher.selectable_count(), 0);
     }
 }

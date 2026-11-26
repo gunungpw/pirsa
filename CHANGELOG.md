@@ -5,6 +5,36 @@ All notable changes to Pirsa are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.10.0] - 2026-11-26
+
+### Added
+
+- File and folder search. Prefixing the query with `~` or `>` searches the
+  files and folders in the Windows profile instead of the Start Menu, ranked by
+  name. Results show the trailing path and whether the entry is a file or a
+  folder; **Enter** or a click opens it with its default handler. The walk is
+  bounded (six folder levels, 20,000 entries, 250 ms), debounced, and the newest
+  query always wins.
+- **Ctrl+1** … **Ctrl+8** launch the nth visible app row, or open the nth file
+  result while in file mode.
+- **Tab** opens the Settings window from the launcher.
+- The launcher remembers its position per monitor in
+  `%LOCALAPPDATA%\Pirsa\window.txt` and restores the last-used monitor. A
+  missing monitor falls back to the monitor under the foreground window.
+- Start Menu support entries — uninstallers, readmes, help files, release notes,
+  licence files, and website shortcuts — are filtered out of the app list by
+  whole-word match.
+- Tests for file-query parsing and ranking, the bounded-walk helpers, the noise
+  filter, per-monitor placement math, file-row rendering, and file-mode state.
+
+### Changed
+
+- `pirsa-core` gained a `files` module and `util::is_noise_name`;
+  `pirsa-platform` gained `files` (bounded walk and `open_path`) and
+  `window_memory` (placement) modules.
+- Showing the launcher no longer re-centers it on every open, so a position the
+  user dragged the window to survives hide/show and restarts.
+
 ## [0.9.0] - 2026-11-26
 
 ### Added

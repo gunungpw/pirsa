@@ -13,7 +13,7 @@ use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
 use windows::core::{PCWSTR, w};
 
 use super::com::ComApartment;
-use pirsa_core::util::{log, normalize_name};
+use pirsa_core::util::{is_noise_name, log, normalize_name};
 use pirsa_core::{AppEntry, LaunchTarget, ScanResult};
 
 /// Discovers Start Menu applications from both shortcut folders and the
@@ -198,7 +198,10 @@ fn collect_shortcuts(
         };
 
         let key = normalize_name(name);
-        if key.is_empty() || !seen.insert(key) {
+
+        // "Uninstall Steam", "Readme", "Website" and friends are support
+        // material, not applications worth a row.
+        if key.is_empty() || is_noise_name(&key) || !seen.insert(key) {
             continue;
         }
 
@@ -293,7 +296,7 @@ fn scan_apps_folder_inner() -> Result<Vec<AppEntry>, String> {
             let app = AppEntry::new(display_name.to_owned(), detail, target);
             let key = app.search_key();
 
-            if key.is_empty() || !seen.insert(key.to_owned()) {
+            if key.is_empty() || is_noise_name(key) || !seen.insert(key.to_owned()) {
                 continue;
             }
 
