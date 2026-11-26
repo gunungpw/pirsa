@@ -64,8 +64,11 @@ pub fn init(choice: HotkeyChoice) -> HotkeyStatus {
 }
 
 /// Changes the system-wide hotkey and keeps the tray tooltip in sync.
-pub fn set_hotkey(choice: HotkeyChoice) -> HotkeyStatus {
-    let status = hotkey::set(choice);
+///
+/// The change round-trips through the hotkey thread, so this is a future the
+/// caller should run as a task instead of blocking the UI thread.
+pub async fn set_hotkey(choice: HotkeyChoice) -> HotkeyStatus {
+    let status = hotkey::set(choice).await;
 
     if status.available() {
         tray::set_tooltip(&format!("Pirsa — {}", choice.label()));

@@ -5,6 +5,51 @@ All notable changes to Pirsa are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.0] - 2026-11-26
+
+### Added
+
+- On-disk icon cache under `%LOCALAPPDATA%\Pirsa\icons`. Only apps whose target
+  changed are re-read from the shell, and the cache is pruned automatically
+  (entries older than 30 days, or beyond 512 files).
+- Continuous integration workflow running `cargo fmt --check`,
+  `cargo clippy --all-targets -- -D warnings`, the test suite, and a benchmark
+  build on Windows.
+- Criterion benchmark for the search ranking.
+- Tests for queued rescans, batched platform requests, accepted and rejected
+  hotkey changes, icon pruning, icon-cache encoding, and the partial-index
+  warning.
+
+### Changed
+
+- Changing the global hotkey no longer blocks the UI thread: the round-trip to
+  the hotkey thread now runs as a task.
+- The launcher view borrows one `ViewState` struct instead of implementing a
+  16-method trait, so adding a field no longer touches the trait, its
+  implementation, and the test fixture.
+- A settings window that fails to open no longer leaves a stale window id
+  behind; the id is recorded when the window reports that it opened.
+- Pressing **F5** during a scan queues one rescan instead of being ignored.
+- Partial-index warnings now show their actual message in the footer, and
+  **Esc** closes the Settings window.
+- The Settings window scrolls its fields, keeping **Close** reachable on small
+  or high-DPI displays.
+- Icons are keyed by an app's stable search key rather than its display name.
+- Shared dependency versions live in `[workspace.dependencies]`.
+
+### Removed
+
+- The synthetic mouse click used as the last-resort foreground fallback. It
+  teleported the cursor and could click the wrong target; the Alt-press fallback
+  and the focus retry remain.
+
+### Fixed
+
+- Clicking a result activates the app by its stable search key, so a scan that
+  lands between rendering and clicking can no longer launch a different app.
+- Icons of apps that disappear from the Start Menu are dropped instead of
+  lingering in memory.
+
 ## [0.8.0] - 2026-11-26
 
 ### Added

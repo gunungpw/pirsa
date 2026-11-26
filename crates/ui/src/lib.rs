@@ -6,7 +6,8 @@ use iced::border;
 use iced::widget::image::Handle;
 use iced::widget::text::Wrapping;
 use iced::widget::{
-    Image, Space, button, column, container, mouse_area, pick_list, row, text, text_input,
+    Image, Space, button, column, container, mouse_area, pick_list, row, scrollable, text,
+    text_input,
 };
 use iced::{Alignment, Background, Border, Color, Element, Font, Length, Theme};
 
@@ -20,7 +21,8 @@ pub enum Message {
     QueryChanged(String),
     ClearQuery,
     Navigate(i32),
-    Activate(usize),
+    /// Launch the app with this stable search key.
+    Activate(String),
     CopyCalc,
     OpenSettings,
     Quit,
@@ -38,24 +40,30 @@ pub enum SettingsMessage {
     Close,
 }
 
-/// Read-only state the view needs from the launcher.
-pub trait ViewModel {
-    fn apps(&self) -> &[AppEntry];
-    fn results(&self) -> &[usize];
-    fn calc(&self) -> Option<&CalcResult>;
-    fn icons(&self) -> &HashMap<String, Handle>;
-    fn query(&self) -> &str;
-    fn selected(&self) -> usize;
-    fn hotkey(&self) -> HotkeyStatus;
-    fn hotkey_choice(&self) -> HotkeyChoice;
-    fn error(&self) -> Option<&str>;
-    fn warning(&self) -> Option<&str>;
-    fn indexing(&self) -> bool;
-    fn result_limit(&self) -> usize;
-    fn theme(&self) -> &Theme;
-    fn font(&self) -> Font;
-    fn app_name_font(&self) -> Font;
-    fn category_font(&self) -> Font;
+/// Read-only state the launcher view renders.
+///
+/// The view borrows one struct instead of requiring a trait implementation, so
+/// adding a field does not ripple through a trait, its implementation, and the
+/// test fixture.
+#[derive(Debug, Clone, Copy)]
+pub struct ViewState<'a> {
+    pub apps: &'a [AppEntry],
+    pub results: &'a [usize],
+    pub calc: Option<&'a CalcResult>,
+    /// Real icons keyed by [`AppEntry::search_key`].
+    pub icons: &'a HashMap<String, Handle>,
+    pub query: &'a str,
+    pub selected: usize,
+    pub hotkey: HotkeyStatus,
+    pub hotkey_choice: HotkeyChoice,
+    pub error: Option<&'a str>,
+    pub warning: Option<&'a str>,
+    pub indexing: bool,
+    pub result_limit: usize,
+    pub theme: &'a Theme,
+    pub font: Font,
+    pub app_name_font: Font,
+    pub category_font: Font,
 }
 
 pub const WINDOW_WIDTH: f32 = 820.0;
@@ -189,12 +197,12 @@ fn bold_font(font: Font) -> Font {
     }
 }
 
-pub fn view(app: &impl ViewModel) -> Element<'_, Message> {
-    let colors = Colors::from_theme(app.theme());
-    let font = app.font();
+pub fn view<'a>(app: ViewState<'a>) -> Element<'a, Message> {
+    let colors = Colors::from_theme(app.theme);
+    let font = app.font;
     let mut content = column![search_row(app, colors, font), Space::new().height(12)];
 
-    if let Some(calc) = app.calc() {
+    if let Some(calc) = app.calc {
         content = content.push(calc_card(app, calc, colors, font));
         content = content.push(Space::new().height(CALC_GAP));
     }
@@ -216,8 +224,8 @@ pub fn view(app: &impl ViewModel) -> Element<'_, Message> {
         .into()
 }
 
-fn search_row(app: &impl ViewModel, colors: Colors, font: Font) -> Element<'_, Message> {
-    let field = text_input("Search apps, calculate, convert…", app.query())
+fn search_row<'a>(app: ViewState<'a>, colors: Colors, font: Font) -> Element<'a, Message> {
+    let field = text_input("Search apps, calculate, convert…", app.query)
         .id(INPUT_ID)
         .on_input(Message::QueryChanged)
         .padding([0, 0])
@@ -226,7 +234,7 @@ fn search_row(app: &impl ViewModel, colors: Colors, font: Font) -> Element<'_, M
         .style(search_input_style)
         .width(Length::Fill);
 
-    let clear: Element<'_, Message> = if app.query().is_empty() {
+    let clear: Element<'_, Message> = if app.query.is_empty() {
         Space::new().width(22).into()
     } else {
         button(text("×").size(15).font(font).color(colors.muted))
@@ -247,7 +255,7 @@ fn search_row(app: &impl ViewModel, colors: Colors, font: Font) -> Element<'_, M
 }
 
 fn calc_card<'a>(
-    app: &'a impl ViewModel,
+    app: ViewState<'a>,
     calc: &'a CalcResult,
     colors: Colors,
     font: Font,
@@ -302,7 +310,7 @@ fn calc_card<'a>(
     .align_y(Alignment::Center)
     .spacing(12);
 
-    let selected = app.selected() == 0;
+    let selected = app.selected == 0;
 
     button(content)
         .on_press(Message::CopyCalc)
@@ -313,9 +321,9 @@ fn calc_card<'a>(
         .into()
 }
 
-fn section_label(app: &impl ViewModel, colors: Colors, font: Font) -> Element<'_, Message> {
-    let query_empty = app.query().trim().is_empty();
-    let indexing = app.indexing() && app.apps().is_empty();
+fn section_label<'a>(app: ViewState<'a>, colors: Colors, font: Font) -> Element<'a, Message> {
+    let query_empty = app.query.trim().is_empty();
+    let indexing = app.indexing && app.apps.is_empty();
     let title = if indexing {
         "Indexing"
     } else if query_empty {
@@ -326,14 +334,14 @@ fn section_label(app: &impl ViewModel, colors: Colors, font: Font) -> Element<'_
     let count = if indexing {
         "SCANNING…".to_owned()
     } else if query_empty {
-        format!("{} APPS", app.apps().len())
+        format!("{} APPS", app.apps.len())
     } else {
-        format!("{} FOUND", app.results().len())
+        format!("{} FOUND", app.results.len())
     };
 
     let mut details = row![Space::new().width(Length::Fill)].align_y(Alignment::Center);
 
-    if app.warning().is_some() {
+    if app.warning.is_some() {
         details = details.push(
             text("PARTIAL INDEX")
                 .size(9)
@@ -361,19 +369,19 @@ fn section_label(app: &impl ViewModel, colors: Colors, font: Font) -> Element<'_
     .into()
 }
 
-fn result_list(app: &impl ViewModel, colors: Colors, font: Font) -> Element<'_, Message> {
-    let limit = app.result_limit();
+fn result_list<'a>(app: ViewState<'a>, colors: Colors, font: Font) -> Element<'a, Message> {
+    let limit = app.result_limit;
     let height = limit as f32 * ROW_HEIGHT + (limit.saturating_sub(1)) as f32 * ROW_GAP;
 
-    let content: Element<'_, Message> = if app.results().is_empty() {
-        if app.calc().is_some() {
+    let content: Element<'_, Message> = if app.results.is_empty() {
+        if app.calc.is_some() {
             Space::new().into()
         } else {
             empty_state(app, colors, font)
         }
     } else {
         let rows: Vec<Element<'_, Message>> = app
-            .results()
+            .results
             .iter()
             .take(limit)
             .enumerate()
@@ -390,33 +398,33 @@ fn result_list(app: &impl ViewModel, colors: Colors, font: Font) -> Element<'_, 
         .into()
 }
 
-fn result_row(
-    app: &impl ViewModel,
+fn result_row<'a>(
+    app: ViewState<'a>,
     app_index: usize,
     position: usize,
     colors: Colors,
     font: Font,
-) -> Element<'_, Message> {
-    let Some(entry) = app.apps().get(app_index) else {
+) -> Element<'a, Message> {
+    let Some(entry) = app.apps.get(app_index) else {
         return Space::new().into();
     };
 
-    let selected = position + usize::from(app.calc().is_some()) == app.selected();
+    let selected = position + usize::from(app.calc.is_some()) == app.selected;
 
     // `button` places its content at the top-left, so the row has to claim the
     // full height and center its items itself. Otherwise the selected
     // highlight extends well below the icon and label.
     let content = row![
-        icon_element(entry, app.icons().get(entry.name()), colors, font),
+        icon_element(entry, app.icons.get(entry.search_key()), colors, font),
         row![
             text(entry.name())
                 .size(15)
-                .font(semibold_font(app.app_name_font()))
+                .font(semibold_font(app.app_name_font))
                 .color(colors.text)
                 .wrapping(Wrapping::None),
             text(inline_detail(entry))
                 .size(11)
-                .font(app.category_font())
+                .font(app.category_font)
                 .color(colors.dim)
                 .wrapping(Wrapping::None),
         ]
@@ -438,7 +446,7 @@ fn result_row(
     .spacing(12);
 
     button(content)
-        .on_press(Message::Activate(position))
+        .on_press(Message::Activate(entry.search_key().to_owned()))
         .width(Length::Fill)
         .height(ROW_HEIGHT)
         .padding([0, 12])
@@ -446,20 +454,20 @@ fn result_row(
         .into()
 }
 
-fn empty_state(app: &impl ViewModel, colors: Colors, font: Font) -> Element<'_, Message> {
-    let (title, subtitle) = if app.indexing() {
+fn empty_state<'a>(app: ViewState<'a>, colors: Colors, font: Font) -> Element<'a, Message> {
+    let (title, subtitle) = if app.indexing {
         (
             "Indexing Start Menu…".to_owned(),
             "Apps will appear in a moment.".to_owned(),
         )
-    } else if app.apps().is_empty() {
+    } else if app.apps.is_empty() {
         (
             "No apps indexed".to_owned(),
             "Press F5 to scan the Start Menu again.".to_owned(),
         )
     } else {
         (
-            format!("No matches for “{}”", app.query().trim()),
+            format!("No matches for “{}”", app.query.trim()),
             "Try a different name, or press Esc to close.".to_owned(),
         )
     };
@@ -482,7 +490,7 @@ fn empty_state(app: &impl ViewModel, colors: Colors, font: Font) -> Element<'_, 
     .into()
 }
 
-fn footer(app: &impl ViewModel, colors: Colors, font: Font) -> Element<'_, Message> {
+fn footer<'a>(app: ViewState<'a>, colors: Colors, font: Font) -> Element<'a, Message> {
     let settings = button(text("Settings").size(10).font(font))
         .on_press(Message::OpenSettings)
         .padding([3, 7])
@@ -493,7 +501,7 @@ fn footer(app: &impl ViewModel, colors: Colors, font: Font) -> Element<'_, Messa
         .padding([3, 7])
         .style(ghost_button_style);
 
-    if let Some(error) = app.error() {
+    if let Some(error) = app.error {
         return row![
             status_dot(colors.danger),
             text(error).size(10).font(font).color(colors.danger),
@@ -508,19 +516,37 @@ fn footer(app: &impl ViewModel, colors: Colors, font: Font) -> Element<'_, Messa
         .into();
     }
 
-    let (color, label) = match app.hotkey() {
+    if let Some(warning) = app.warning {
+        return row![
+            status_dot(colors.warning),
+            text(shorten(warning, 72))
+                .size(10)
+                .font(font)
+                .color(colors.warning),
+            Space::new().width(Length::Fill),
+            settings,
+            Space::new().width(8),
+            quit,
+        ]
+        .spacing(7)
+        .align_y(Alignment::Center)
+        .height(24)
+        .into();
+    }
+
+    let (color, label) = match app.hotkey {
         HotkeyStatus::Ready => (
             colors.success,
-            std::borrow::Cow::Borrowed(app.hotkey_choice().label()),
+            std::borrow::Cow::Borrowed(app.hotkey_choice.label()),
         ),
         HotkeyStatus::Unavailable => (
             colors.danger,
-            std::borrow::Cow::Owned(format!("{} unavailable", app.hotkey_choice().label())),
+            std::borrow::Cow::Owned(format!("{} unavailable", app.hotkey_choice.label())),
         ),
         HotkeyStatus::Pending => (colors.dim, std::borrow::Cow::Borrowed("Starting…")),
     };
 
-    let primary_action = if app.calc().is_some() && app.selected() == 0 {
+    let primary_action = if app.calc.is_some() && app.selected == 0 {
         "Copy"
     } else {
         "Open"
@@ -554,6 +580,19 @@ fn keycap(label: &'static str, colors: Colors, font: Font) -> Element<'static, M
         .align_y(Alignment::Center)
         .style(keycap_style)
         .into()
+}
+
+/// Shortens a one-line status message so it cannot collide with the footer
+/// buttons.
+fn shorten(text: &str, max_chars: usize) -> String {
+    let mut characters = text.chars();
+    let shortened: String = characters.by_ref().take(max_chars).collect();
+
+    if characters.next().is_some() {
+        format!("{shortened}…")
+    } else {
+        shortened
+    }
 }
 
 fn status_dot(color: Color) -> Element<'static, Message> {
@@ -742,16 +781,7 @@ pub fn settings_view<'a>(
     .padding([8, 18])
     .style(primary_button_style);
 
-    let content = column![
-        text("Settings")
-            .size(24)
-            .font(bold_font(font))
-            .color(colors.text),
-        text("Changes apply immediately.")
-            .size(11)
-            .font(font)
-            .color(colors.dim),
-        Space::new().height(18),
+    let fields = column![
         settings_field("UI font", font_picker.into(), colors, font),
         Space::new().height(12),
         settings_field("App name font", app_name_font_picker.into(), colors, font),
@@ -766,7 +796,23 @@ pub fn settings_view<'a>(
         text("Preview").size(11).font(font).color(colors.dim),
         Space::new().height(6),
         preview,
-        Space::new().height(Length::Fill),
+    ]
+    .width(Length::Fill);
+
+    let content = column![
+        text("Settings")
+            .size(24)
+            .font(bold_font(font))
+            .color(colors.text),
+        text("Changes apply immediately.")
+            .size(11)
+            .font(font)
+            .color(colors.dim),
+        Space::new().height(18),
+        // The window is a fixed size, so a short screen scrolls the fields
+        // instead of pushing the Close button out of reach.
+        scrollable(fields).height(Length::Fill),
+        Space::new().height(12),
         row![Space::new().width(Length::Fill), close]
             .width(Length::Fill)
             .align_y(Alignment::Center),
@@ -948,118 +994,47 @@ mod tests {
     use super::*;
     use pirsa_core::settings::Settings;
 
-    struct TestModel {
-        apps: Vec<AppEntry>,
-        results: Vec<usize>,
-        calc: Option<CalcResult>,
-        icons: HashMap<String, Handle>,
-        query: String,
-        selected: usize,
-        hotkey: HotkeyStatus,
-        hotkey_choice: HotkeyChoice,
-        error: Option<String>,
-        warning: Option<String>,
-        indexing: bool,
-        theme: Theme,
-        font: Font,
+    fn notepad() -> AppEntry {
+        AppEntry::new(
+            "Notepad".to_owned(),
+            "Start Menu".to_owned(),
+            LaunchTarget::Shell("test:notepad".to_owned()),
+        )
     }
 
-    impl TestModel {
-        fn with_one_app() -> Self {
-            let app = AppEntry::new(
-                "Notepad".to_owned(),
-                "Start Menu".to_owned(),
-                LaunchTarget::Shell("test:notepad".to_owned()),
-            );
-
-            Self {
-                apps: vec![app],
-                results: vec![0],
-                calc: None,
-                icons: HashMap::new(),
-                query: String::new(),
-                selected: 0,
-                hotkey: HotkeyStatus::Ready,
-                hotkey_choice: HotkeyChoice::AltSpace,
-                error: None,
-                warning: None,
-                indexing: false,
-                theme: Theme::Dark,
-                font: Font::with_name("Segoe UI"),
-            }
-        }
-    }
-
-    impl ViewModel for TestModel {
-        fn apps(&self) -> &[AppEntry] {
-            &self.apps
-        }
-
-        fn results(&self) -> &[usize] {
-            &self.results
-        }
-
-        fn calc(&self) -> Option<&CalcResult> {
-            self.calc.as_ref()
-        }
-
-        fn icons(&self) -> &HashMap<String, Handle> {
-            &self.icons
-        }
-
-        fn query(&self) -> &str {
-            &self.query
-        }
-
-        fn selected(&self) -> usize {
-            self.selected
-        }
-
-        fn hotkey(&self) -> HotkeyStatus {
-            self.hotkey
-        }
-
-        fn hotkey_choice(&self) -> HotkeyChoice {
-            self.hotkey_choice
-        }
-
-        fn error(&self) -> Option<&str> {
-            self.error.as_deref()
-        }
-
-        fn warning(&self) -> Option<&str> {
-            self.warning.as_deref()
-        }
-
-        fn indexing(&self) -> bool {
-            self.indexing
-        }
-
-        fn result_limit(&self) -> usize {
-            MAX_RESULTS
-        }
-
-        fn theme(&self) -> &Theme {
-            &self.theme
-        }
-
-        fn font(&self) -> Font {
-            self.font
-        }
-
-        fn app_name_font(&self) -> Font {
-            self.font
-        }
-
-        fn category_font(&self) -> Font {
-            self.font
+    fn app_state<'a>(
+        apps: &'a [AppEntry],
+        results: &'a [usize],
+        icons: &'a HashMap<String, Handle>,
+        theme: &'a Theme,
+    ) -> ViewState<'a> {
+        ViewState {
+            apps,
+            results,
+            calc: None,
+            icons,
+            query: "",
+            selected: 0,
+            hotkey: HotkeyStatus::Ready,
+            hotkey_choice: HotkeyChoice::AltSpace,
+            error: None,
+            warning: None,
+            indexing: false,
+            result_limit: MAX_RESULTS,
+            theme,
+            font: Font::with_name("Segoe UI"),
+            app_name_font: Font::with_name("Segoe UI"),
+            category_font: Font::with_name("Segoe UI"),
         }
     }
 
     #[test]
     fn launcher_rows_can_be_activated_headlessly() {
-        let model = TestModel::with_one_app();
-        let mut ui = iced_tester::test::simulator(view(&model));
+        let apps = [notepad()];
+        let results = [0];
+        let icons = HashMap::new();
+        let theme = Theme::Dark;
+        let mut ui = iced_tester::test::simulator(view(app_state(&apps, &results, &icons, &theme)));
 
         assert!(ui.find("Notepad").is_ok());
         ui.click("Notepad")
@@ -1069,15 +1044,18 @@ mod tests {
         assert!(
             messages
                 .iter()
-                .any(|message| matches!(message, Message::Activate(0))),
-            "clicking the row should activate the app"
+                .any(|message| matches!(message, Message::Activate(key) if key == "notepad")),
+            "clicking the row should activate the app by its stable key"
         );
     }
 
     #[test]
     fn settings_button_opens_settings_headlessly() {
-        let model = TestModel::with_one_app();
-        let mut ui = iced_tester::test::simulator(view(&model));
+        let apps = [notepad()];
+        let results = [0];
+        let icons = HashMap::new();
+        let theme = Theme::Dark;
+        let mut ui = iced_tester::test::simulator(view(app_state(&apps, &results, &icons, &theme)));
 
         ui.click("Settings")
             .expect("Settings button should be clickable");
@@ -1089,6 +1067,20 @@ mod tests {
                 .any(|message| matches!(message, Message::OpenSettings)),
             "clicking Settings should emit OpenSettings"
         );
+    }
+
+    #[test]
+    fn index_warning_is_shown_in_the_footer() {
+        let apps = [notepad()];
+        let results = [0];
+        let icons = HashMap::new();
+        let theme = Theme::Dark;
+        let mut state = app_state(&apps, &results, &icons, &theme);
+        state.warning = Some("Windows apps could not be indexed.");
+
+        let mut ui = iced_tester::test::simulator(view(state));
+
+        assert!(ui.find("Windows apps could not be indexed.").is_ok());
     }
 
     #[test]

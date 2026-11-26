@@ -32,7 +32,8 @@ of the way.
   `1 inch to cm` for a single target.
 - **Real application icons** — every row shows the app's actual Windows icon,
   read from the shell for both Start Menu shortcuts and Store apps, with a
-  colored initial tile only as a fallback.
+  colored initial tile only as a fallback. Icons are cached on disk, so later
+  launches only ask the shell about new or updated apps.
 - **Keyboard-first** — arrow keys to move, Enter to launch, Esc to hide.
 - **One instance** — launching `pirsa.exe` again reveals the running launcher
   instead of starting a second copy.
@@ -137,6 +138,7 @@ footer or with **Ctrl+Q** while it is focused.
 | `Esc` | Hide the launcher |
 | `Ctrl+Q` | Quit Pirsa |
 | `Ctrl+,` | Open the settings window |
+| `Esc` (Settings focused) | Close the settings window |
 | `F5` | Rescan the Start Menu |
 | Click a row | Launch that app or copy that calculation |
 | Drag the app-list heading | Move the window |
@@ -194,7 +196,10 @@ taking precedence. Store apps are launched through their AppUserModelID; desktop
 apps are launched through their shortcut or executable path.
 
 On a typical development machine this indexes 140+ apps in well under a second.
-The full scan is synchronous at boot; **F5** refreshes it.
+The scan runs on a dedicated STA worker thread, so the window appears while it
+finishes; **F5** refreshes it (a refresh requested mid-scan is queued, not
+dropped). Extracted icons are cached under `%LOCALAPPDATA%\Pirsa\icons`, so the
+shell is only asked about new or updated apps.
 
 ## Why Alt+Space by default?
 
@@ -265,7 +270,8 @@ Release history is documented in [CHANGELOG.md](CHANGELOG.md).
 
 ## Limitations
 
-- Only the first eight results are shown; refine the query to narrow further.
+- Up to eight results are shown (seven while a calculation card is visible);
+  refine the query to narrow further.
 - Single-user installation; no MSI installer or auto-updater.
 
 ## License

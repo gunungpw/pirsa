@@ -1,4 +1,4 @@
-﻿#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 #[cfg(not(windows))]
 compile_error!("Pirsa only supports Windows.");
@@ -14,7 +14,17 @@ use crate::app::Launcher;
 
 fn main() -> iced::Result {
     std::panic::set_hook(Box::new(|info| {
-        util::log(format!("panic: {info}"));
+        let profile = if cfg!(debug_assertions) {
+            "debug"
+        } else {
+            "release"
+        };
+        let backtrace = std::backtrace::Backtrace::force_capture();
+
+        util::log(format!(
+            "panic in Pirsa {} ({profile}): {info}\n{backtrace}",
+            env!("CARGO_PKG_VERSION")
+        ));
     }));
 
     let settings = Settings::load();

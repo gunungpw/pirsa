@@ -1,6 +1,6 @@
 //! Launcher state and iced update logic.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use iced::futures::{StreamExt, stream};
@@ -39,11 +39,15 @@ pub struct Launcher {
     pub(crate) settings_window: Option<window::Id>,
     pub(crate) hwnd: Option<isize>,
     pub(crate) hotkey: HotkeyStatus,
+    /// Hotkey change currently round-tripping through the platform thread.
+    pub(crate) hotkey_pending: Option<HotkeyChoice>,
     /// Feedback shown inside the settings window, such as a rejected hotkey.
     pub(crate) settings_notice: Option<String>,
     pub(crate) error: Option<String>,
     pub(crate) warning: Option<String>,
     pub(crate) indexing: bool,
+    /// Set when F5 arrives while a scan is running; runs once the scan lands.
+    pub(crate) rescan_queued: bool,
     /// Monotonic token for the newest scan; older results are discarded.
     pub(crate) scan_generation: u64,
     /// Monotonic token for the newest icon batch; older results are discarded.
@@ -65,6 +69,11 @@ pub enum Message {
     IconsLoaded {
         generation: u64,
         icons: Vec<(String, Icon)>,
+    },
+    /// Result of a hotkey change that ran off the UI thread.
+    HotkeyChangeFinished {
+        choice: HotkeyChoice,
+        status: HotkeyStatus,
     },
     Event(window::Id, Event),
 }
@@ -88,10 +97,12 @@ impl Launcher {
             settings_window: None,
             hwnd: None,
             hotkey: platform::hotkey_status(),
+            hotkey_pending: None,
             settings_notice: None,
             error: None,
             warning: None,
             indexing: true,
+            rescan_queued: false,
             scan_generation: 0,
             icon_generation: 0,
         };
@@ -127,9 +138,28 @@ impl Launcher {
                     return Task::none();
                 }
 
-                for (name, icon) in icons {
+                for (key, icon) in icons {
                     self.icons
-                        .insert(name, Handle::from_rgba(icon.width, icon.height, icon.rgba));
+                        .insert(key, Handle::from_rgba(icon.width, icon.height, icon.rgba));
+                }
+
+                Task::none()
+            }
+            Message::HotkeyChangeFinished { choice, status } => {
+                self.hotkey_pending = None;
+
+                if status.available() {
+                    self.settings.hotkey = choice;
+                    self.hotkey = status;
+                    self.settings_notice = None;
+                    self.settings.save();
+                } else {
+                    // The platform restored the previous binding, so the stored
+                    // choice and status stay as they were.
+                    self.settings_notice = Some(format!(
+                        "{} is already in use; select another hotkey.",
+                        choice.label()
+                    ));
                 }
 
                 Task::none()
@@ -190,7 +220,7 @@ impl Launcher {
 
                 Task::none()
             }
-            ui::Message::Activate(index) => self.activate(index),
+            ui::Message::Activate(key) => self.activate(&key),
             ui::Message::CopyCalc => self.copy_calc(),
             ui::Message::OpenSettings => self.open_settings(),
             ui::Message::Quit => iced::exit(),
@@ -225,40 +255,40 @@ impl Launcher {
                 Task::none()
             }
             ui::SettingsMessage::HotkeyChanged(hotkey) => {
-                let previous = self.settings.hotkey;
-                let previous_status = self.hotkey;
-
-                if platform::set_hotkey(hotkey).available() {
-                    self.settings.hotkey = hotkey;
-                    self.hotkey = HotkeyStatus::Ready;
-                    self.settings_notice = None;
-                } else {
-                    // The platform thread restores the previous binding when
-                    // the new one is already owned by another app.
-                    self.settings.hotkey = previous;
-                    self.hotkey = previous_status;
-                    self.settings_notice = Some(format!(
-                        "{} is already in use; select another hotkey.",
-                        hotkey.label()
-                    ));
+                if self.hotkey_pending.is_some() || hotkey == self.settings.hotkey {
+                    return Task::none();
                 }
 
-                self.settings.save();
-                Task::none()
+                // Registering a hotkey round-trips through the platform's
+                // message loop; run it as a task so the window keeps painting.
+                self.hotkey_pending = Some(hotkey);
+                self.settings_notice = None;
+
+                Task::perform(platform::set_hotkey(hotkey), move |status| {
+                    Message::HotkeyChangeFinished {
+                        choice: hotkey,
+                        status,
+                    }
+                })
             }
-            ui::SettingsMessage::Close => self
-                .settings_window
-                .map(window::close::<Message>)
-                .unwrap_or_else(Task::none),
+            ui::SettingsMessage::Close => self.close_settings(),
         }
+    }
+
+    fn close_settings(&mut self) -> Task<Message> {
+        self.settings_window
+            .take()
+            .map(window::close::<Message>)
+            .unwrap_or_else(Task::none)
     }
 
     fn open_settings(&mut self) -> Task<Message> {
         let task = if let Some(id) = self.settings_window {
             window::gain_focus::<Message>(id)
         } else {
-            let (id, open) = window::open(settings_window_settings());
-            self.settings_window = Some(id);
+            // The window id is recorded when the open task reports back, so a
+            // failed open never leaves a dead id behind.
+            let (_, open) = window::open(settings_window_settings());
             self.settings_notice = None;
             util::log("opening settings window");
             open.map(Message::SettingsOpened)
@@ -272,7 +302,29 @@ impl Launcher {
             ui::settings_view(&self.settings, &self.theme, self.settings_notice.as_deref())
                 .map(Message::Settings)
         } else {
-            ui::view(self).map(Message::Ui)
+            ui::view(self.view_state()).map(Message::Ui)
+        }
+    }
+
+    /// Borrows the read-only slice of state the launcher view renders.
+    fn view_state(&self) -> ui::ViewState<'_> {
+        ui::ViewState {
+            apps: &self.apps,
+            results: &self.results,
+            calc: self.calc.as_ref(),
+            icons: &self.icons,
+            query: &self.query,
+            selected: self.selected,
+            hotkey: self.hotkey,
+            hotkey_choice: self.settings.hotkey,
+            error: self.error.as_deref(),
+            warning: self.warning.as_deref(),
+            indexing: self.indexing,
+            result_limit: self.result_limit(),
+            theme: &self.theme,
+            font: Font::with_name(self.settings.font.name()),
+            app_name_font: Font::with_name(self.settings.app_name_font.name()),
+            category_font: Font::with_name(self.settings.category_font.name()),
         }
     }
 
@@ -312,24 +364,32 @@ impl Launcher {
 
     fn tick(&mut self) -> Task<Message> {
         let requests = platform::take_requests();
+        self.apply_requests(requests)
+    }
 
+    /// Handles every request collected since the last tick.
+    ///
+    /// Reading the flags clears them, so dropping one here loses it. Visibility
+    /// requests are merged (a toggle already decides show or hide), while a
+    /// settings request is independent of them.
+    fn apply_requests(&mut self, requests: platform::Requests) -> Task<Message> {
         if requests.quit {
             return iced::exit();
         }
 
-        if requests.settings {
-            return self.open_settings();
-        }
+        let mut tasks = Vec::new();
 
-        if requests.show {
-            return self.show();
+        if requests.settings {
+            tasks.push(self.open_settings());
         }
 
         if requests.toggle {
-            return self.toggle();
+            tasks.push(self.toggle());
+        } else if requests.show {
+            tasks.push(self.show());
         }
 
-        Task::none()
+        Task::batch(tasks)
     }
 
     fn toggle(&mut self) -> Task<Message> {
@@ -401,23 +461,22 @@ impl Launcher {
             .unwrap_or_else(Task::none)
     }
 
-    fn activate(&mut self, index: usize) -> Task<Message> {
-        let Some(&app_index) = self.results.get(index) else {
+    /// Launches the app identified by its stable search key.
+    ///
+    /// The key survives rescans, so a click that races a scan can never launch
+    /// whichever app happened to move into the same row.
+    fn activate(&mut self, key: &str) -> Task<Message> {
+        let Some(app) = self.apps.iter().find(|app| app.search_key() == key) else {
             return Task::none();
         };
 
-        let Some(app) = self.apps.get(app_index) else {
-            return Task::none();
-        };
-
-        let key = app.search_key().to_owned();
         let name = app.name().to_owned();
 
         match platform::launch(app) {
             Ok(()) => {
                 // Remember the launch before hiding so the next visit already
                 // shows this app near the top of the list.
-                self.usage.record(&key);
+                self.usage.record(key);
                 self.usage.save();
                 self.hide()
             }
@@ -430,15 +489,26 @@ impl Launcher {
     }
 
     fn activate_selected(&mut self) -> Task<Message> {
-        if self.calc.is_some() {
+        let position = if self.calc.is_some() {
             if self.selected == 0 {
                 return self.copy_calc();
             }
 
-            self.activate(self.selected - 1)
+            self.selected - 1
         } else {
-            self.activate(self.selected)
-        }
+            self.selected
+        };
+
+        let Some(&index) = self.results.get(position) else {
+            return Task::none();
+        };
+
+        let Some(app) = self.apps.get(index) else {
+            return Task::none();
+        };
+
+        let key = app.search_key().to_owned();
+        self.activate(&key)
     }
 
     fn copy_calc(&mut self) -> Task<Message> {
@@ -457,6 +527,7 @@ impl Launcher {
         self.scan_generation = self.scan_generation.wrapping_add(1);
         let generation = self.scan_generation;
         self.indexing = true;
+        self.rescan_queued = false;
 
         Task::perform(platform::scan(), move |scan| Message::ScanComplete {
             generation,
@@ -465,9 +536,10 @@ impl Launcher {
     }
 
     fn rescan(&mut self) -> Task<Message> {
-        // The scan worker serializes scans, so queueing another one while a
-        // scan is running only delays the result the user is waiting for.
+        // The scan worker serializes scans, so a request that arrives mid-scan
+        // is queued and starts as soon as the current one lands.
         if self.indexing {
+            self.rescan_queued = true;
             return Task::none();
         }
 
@@ -501,8 +573,23 @@ impl Launcher {
         self.recompute();
         self.selected = 0;
 
+        // Icons of apps that dropped out of the index must not linger, and the
+        // batch below only covers the apps that still lack one.
+        {
+            let current: HashSet<&str> = self.apps.iter().map(|app| app.search_key()).collect();
+            self.icons.retain(|key, _| current.contains(key.as_str()));
+        }
+
         util::log(format!("indexed {count} apps"));
-        self.load_icons()
+
+        let icons = self.load_icons();
+
+        if self.rescan_queued {
+            self.rescan_queued = false;
+            return Task::batch([icons, self.begin_scan()]);
+        }
+
+        icons
     }
 
     /// Clears the query and any error, then rebuilds the result list.
@@ -514,13 +601,25 @@ impl Launcher {
         self.selected = 0;
     }
 
-    /// Loads the real application icons on the shell worker.
+    /// Loads icons for the apps that do not have one yet.
     fn load_icons(&mut self) -> Task<Message> {
+        // Bumped even when nothing is missing so a late batch from a previous
+        // scan cannot insert icons for apps that just disappeared.
         self.icon_generation = self.icon_generation.wrapping_add(1);
         let generation = self.icon_generation;
-        let apps = self.apps.clone();
 
-        Task::perform(platform::extract_icons(apps), move |icons| {
+        let missing: Vec<AppEntry> = self
+            .apps
+            .iter()
+            .filter(|app| !self.icons.contains_key(app.search_key()))
+            .cloned()
+            .collect();
+
+        if missing.is_empty() {
+            return Task::none();
+        }
+
+        Task::perform(platform::extract_icons(missing), move |icons| {
             Message::IconsLoaded { generation, icons }
         })
     }
@@ -551,12 +650,18 @@ impl Launcher {
 
     fn handle_event(&mut self, window_id: window::Id, event: Event) -> Task<Message> {
         if self.settings_window == Some(window_id) {
-            if matches!(event, Event::Window(window::Event::Closed)) {
-                self.settings_window = None;
-                util::log("settings window closed");
-            }
-
-            return Task::none();
+            return match event {
+                Event::Window(window::Event::Closed) => {
+                    self.settings_window = None;
+                    util::log("settings window closed");
+                    Task::none()
+                }
+                Event::Keyboard(KeyboardEvent::KeyPressed {
+                    key: Key::Named(Named::Escape),
+                    ..
+                }) => self.close_settings(),
+                _ => Task::none(),
+            };
         }
 
         match event {
@@ -591,20 +696,22 @@ impl Launcher {
     fn handle_key(&mut self, key: Key, modifiers: Modifiers, repeat: bool) -> Task<Message> {
         let key = key.as_ref();
 
-        if modifiers.control() && matches!(key, Key::Character("q") | Key::Character("Q")) {
-            return iced::exit();
-        }
-
-        if modifiers.control() && matches!(key, Key::Character(",")) {
-            return self.open_settings();
-        }
-
+        // Repeats only ever repeat navigation. Handling this first keeps a held
+        // Ctrl+, from opening one settings window per repeat.
         if repeat {
             return match key {
                 Key::Named(Named::ArrowUp) => self.update(Message::Ui(ui::Message::Navigate(-1))),
                 Key::Named(Named::ArrowDown) => self.update(Message::Ui(ui::Message::Navigate(1))),
                 _ => Task::none(),
             };
+        }
+
+        if modifiers.control() && matches!(key, Key::Character("q") | Key::Character("Q")) {
+            return iced::exit();
+        }
+
+        if modifiers.control() && matches!(key, Key::Character(",")) {
+            return self.open_settings();
         }
 
         match key {
@@ -615,72 +722,6 @@ impl Launcher {
             Key::Named(Named::F5) => self.rescan(),
             _ => Task::none(),
         }
-    }
-}
-
-impl ui::ViewModel for Launcher {
-    fn apps(&self) -> &[AppEntry] {
-        &self.apps
-    }
-
-    fn results(&self) -> &[usize] {
-        &self.results
-    }
-
-    fn calc(&self) -> Option<&CalcResult> {
-        self.calc.as_ref()
-    }
-
-    fn icons(&self) -> &HashMap<String, Handle> {
-        &self.icons
-    }
-
-    fn query(&self) -> &str {
-        &self.query
-    }
-
-    fn selected(&self) -> usize {
-        self.selected
-    }
-
-    fn hotkey(&self) -> HotkeyStatus {
-        self.hotkey
-    }
-
-    fn hotkey_choice(&self) -> HotkeyChoice {
-        self.settings.hotkey
-    }
-
-    fn error(&self) -> Option<&str> {
-        self.error.as_deref()
-    }
-
-    fn warning(&self) -> Option<&str> {
-        self.warning.as_deref()
-    }
-
-    fn indexing(&self) -> bool {
-        self.indexing
-    }
-
-    fn theme(&self) -> &Theme {
-        &self.theme
-    }
-
-    fn font(&self) -> Font {
-        Font::with_name(self.settings.font.name())
-    }
-
-    fn app_name_font(&self) -> Font {
-        Font::with_name(self.settings.app_name_font.name())
-    }
-
-    fn category_font(&self) -> Font {
-        Font::with_name(self.settings.category_font.name())
-    }
-
-    fn result_limit(&self) -> usize {
-        Launcher::result_limit(self)
     }
 }
 
@@ -768,6 +809,7 @@ fn theme_from_choice(choice: ThemeChoice) -> Theme {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use pirsa_core::LaunchTarget;
 
     fn launcher_with_results(count: usize) -> Launcher {
         Launcher {
@@ -786,10 +828,12 @@ mod tests {
             settings_window: None,
             hwnd: None,
             hotkey: HotkeyStatus::Pending,
+            hotkey_pending: None,
             settings_notice: None,
             error: None,
             warning: None,
             indexing: false,
+            rescan_queued: false,
             scan_generation: 0,
             icon_generation: 0,
         }
@@ -825,7 +869,7 @@ mod tests {
     }
 
     #[test]
-    fn rescan_is_ignored_while_indexing() {
+    fn rescan_is_queued_while_indexing() {
         let mut launcher = launcher_with_results(0);
         launcher.scan_generation = 1;
         launcher.indexing = true;
@@ -833,6 +877,78 @@ mod tests {
         let _ = launcher.rescan();
 
         assert_eq!(launcher.scan_generation, 1);
+        assert!(launcher.rescan_queued);
+
+        launcher.indexing = false;
+        let _ = launcher.rescan();
+
+        assert_eq!(launcher.scan_generation, 2);
+        assert!(!launcher.rescan_queued);
+    }
+
+    #[test]
+    fn show_request_reveals_a_hidden_launcher() {
+        let mut launcher = launcher_with_results(0);
+        launcher.visible = false;
+
+        let _ = launcher.apply_requests(platform::Requests {
+            show: true,
+            ..platform::Requests::default()
+        });
+
+        assert!(launcher.visible);
+    }
+
+    #[test]
+    fn rejected_hotkey_keeps_the_previous_choice() {
+        let mut launcher = launcher_with_results(0);
+        launcher.settings.hotkey = HotkeyChoice::AltSpace;
+
+        let _ = launcher.update(Message::HotkeyChangeFinished {
+            choice: HotkeyChoice::CtrlSpace,
+            status: HotkeyStatus::Unavailable,
+        });
+
+        assert_eq!(launcher.settings.hotkey, HotkeyChoice::AltSpace);
+        assert!(launcher.settings_notice.is_some());
+        assert_eq!(launcher.hotkey_pending, None);
+    }
+
+    #[test]
+    fn accepted_hotkey_updates_the_choice() {
+        let mut launcher = launcher_with_results(0);
+        launcher.settings.hotkey = HotkeyChoice::AltSpace;
+
+        let _ = launcher.update(Message::HotkeyChangeFinished {
+            choice: HotkeyChoice::CtrlSpace,
+            status: HotkeyStatus::Ready,
+        });
+
+        assert_eq!(launcher.settings.hotkey, HotkeyChoice::CtrlSpace);
+        assert!(launcher.settings_notice.is_none());
+    }
+
+    #[test]
+    fn icons_of_removed_apps_are_pruned() {
+        let mut launcher = launcher_with_results(0);
+        launcher.scan_generation = 1;
+        launcher
+            .icons
+            .insert("gone".to_owned(), Handle::from_rgba(1, 1, vec![0; 4]));
+
+        let _ = launcher.apply_scan(
+            1,
+            ScanResult {
+                apps: vec![AppEntry::new(
+                    "Notepad".to_owned(),
+                    "Start Menu".to_owned(),
+                    LaunchTarget::Shell("test:notepad".to_owned()),
+                )],
+                warning: None,
+            },
+        );
+
+        assert!(!launcher.icons.contains_key("gone"));
     }
 
     #[test]

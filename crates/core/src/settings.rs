@@ -348,6 +348,12 @@ impl Settings {
 
     /// Persists settings to `%LOCALAPPDATA%\Pirsa\settings.txt`.
     pub fn save(&self) {
+        // Unit tests share the real user data directory; never overwrite the
+        // installed launcher's settings from a test run.
+        if cfg!(test) {
+            return;
+        }
+
         self.save_to(&settings_path());
     }
 

@@ -96,6 +96,12 @@ impl Usage {
 
     /// Persists the history to `%LOCALAPPDATA%\Pirsa\usage.txt`.
     pub fn save(&self) {
+        // Unit tests share the real user data directory; never overwrite the
+        // installed launcher's history from a test run.
+        if cfg!(test) {
+            return;
+        }
+
         self.save_to(&history_path());
     }
 

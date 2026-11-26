@@ -11,14 +11,8 @@ name = "pirsa_ui"
 path = "src/lib.rs"
 
 [dependencies]
-pirsa-core = { path = "../core" }
-iced = { version = "0.14", default-features = false, features = [
-    "wgpu",
-    "web-colors",
-    "tokio",
-    "crisp",
-    "image-without-codecs",
-] }
+pirsa-core.workspace = true
+iced.workspace = true
 
 [dev-dependencies]
 iced_tester = "0.14"

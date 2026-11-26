@@ -32,13 +32,30 @@ const MAX_ICON_SIDE: i32 = 512;
 /// Extracts an icon for every app the shell can provide one for.
 ///
 /// Normally called by the icon worker; the COM guard also supports direct
-/// callers such as tests.
+/// callers such as tests. Icons come from the on-disk cache when possible so a
+/// launch does not re-ask the shell for every app.
 pub(crate) fn extract(apps: &[AppEntry]) -> Vec<(String, Icon)> {
     let _com = ComApartment::new();
+    // Tests must not read or write the installed launcher's cache directory.
+    let use_cache = !cfg!(test);
 
     let icons: Vec<(String, Icon)> = apps
         .iter()
-        .filter_map(|app| icon_for(app.target()).map(|icon| (app.name().to_owned(), icon)))
+        .filter_map(|app| {
+            let key = app.search_key();
+
+            if key.is_empty() {
+                return None;
+            }
+
+            let icon = if use_cache {
+                cache::load(app.target()).or_else(|| extract_and_cache(app.target()))
+            } else {
+                icon_for(app.target())
+            }?;
+
+            Some((key.to_owned(), icon))
+        })
         .collect();
 
     if !cfg!(test) {
@@ -50,6 +67,12 @@ pub(crate) fn extract(apps: &[AppEntry]) -> Vec<(String, Icon)> {
     }
 
     icons
+}
+
+fn extract_and_cache(target: &LaunchTarget) -> Option<Icon> {
+    let icon = icon_for(target)?;
+    cache::store(target, &icon);
+    Some(icon)
 }
 
 fn icon_for(target: &LaunchTarget) -> Option<Icon> {
@@ -196,6 +219,192 @@ fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
+/// On-disk icon cache.
+///
+/// Every icon costs a shell round-trip, so re-extracting the whole Start Menu
+/// on each launch is the slowest part of startup. Entries are keyed by the
+/// launch target plus, for file targets, its size and modification time, so an
+/// updated app misses the cache instead of showing its previous icon.
+mod cache {
+    use std::path::{Path, PathBuf};
+    use std::sync::OnceLock;
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+    use pirsa_core::util::{data_directory, log};
+    use pirsa_core::{Icon, LaunchTarget};
+
+    const MAGIC: &[u8; 8] = b"PIRSAIC1";
+    const HEADER_LEN: usize = MAGIC.len() + 4 + 4;
+    const MAX_AGE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+    const MAX_ENTRIES: usize = 512;
+
+    static PRUNED: OnceLock<()> = OnceLock::new();
+
+    pub(super) fn load(target: &LaunchTarget) -> Option<Icon> {
+        let path = entry_path(target)?;
+
+        decode(&std::fs::read(path).ok()?)
+    }
+
+    pub(super) fn store(target: &LaunchTarget, icon: &Icon) {
+        let Some(path) = entry_path(target) else {
+            return;
+        };
+
+        let Some(directory) = path.parent() else {
+            return;
+        };
+
+        if std::fs::create_dir_all(directory).is_err() {
+            return;
+        }
+
+        maybe_prune(directory);
+
+        if let Err(error) = std::fs::write(&path, encode(icon)) {
+            log(format!("could not cache an icon: {error}"));
+        }
+    }
+
+    fn encode(icon: &Icon) -> Vec<u8> {
+        let mut bytes = Vec::with_capacity(HEADER_LEN + icon.rgba.len());
+        bytes.extend_from_slice(MAGIC);
+        bytes.extend_from_slice(&icon.width.to_le_bytes());
+        bytes.extend_from_slice(&icon.height.to_le_bytes());
+        bytes.extend_from_slice(&icon.rgba);
+        bytes
+    }
+
+    fn decode(bytes: &[u8]) -> Option<Icon> {
+        if bytes.len() < HEADER_LEN || &bytes[..MAGIC.len()] != MAGIC {
+            return None;
+        }
+
+        let width = u32::from_le_bytes(bytes[8..12].try_into().ok()?);
+        let height = u32::from_le_bytes(bytes[12..16].try_into().ok()?);
+        let rgba = &bytes[HEADER_LEN..];
+
+        if rgba.len() != width as usize * height as usize * 4 {
+            return None;
+        }
+
+        Some(Icon {
+            width,
+            height,
+            rgba: rgba.to_vec(),
+        })
+    }
+
+    fn entry_path(target: &LaunchTarget) -> Option<PathBuf> {
+        let (text, stamp) = key_parts(target)?;
+        let directory = data_directory()?.join("icons");
+
+        Some(directory.join(format!("{:016x}.ico", hash(&text, stamp))))
+    }
+
+    fn key_parts(target: &LaunchTarget) -> Option<(String, u64)> {
+        match target {
+            LaunchTarget::Shortcut(path) | LaunchTarget::Executable(path) => {
+                let metadata = std::fs::metadata(path).ok()?;
+                let modified = metadata
+                    .modified()
+                    .ok()?
+                    .duration_since(UNIX_EPOCH)
+                    .ok()?
+                    .as_secs();
+
+                Some((
+                    path.to_string_lossy().into_owned(),
+                    modified ^ metadata.len(),
+                ))
+            }
+            // Shell targets have no file to stat; the AppUserModelID changes
+            // only when the package itself does.
+            LaunchTarget::Shell(shell) => Some((shell.clone(), 0)),
+        }
+    }
+
+    fn hash(text: &str, stamp: u64) -> u64 {
+        let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+
+        for byte in text.bytes().chain(stamp.to_le_bytes()) {
+            hash ^= u64::from(byte);
+            hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+
+        hash
+    }
+
+    /// Keeps the cache bounded. Runs at most once per process, when the first
+    /// icon of the run is stored.
+    fn maybe_prune(directory: &Path) {
+        PRUNED.get_or_init(|| prune(directory));
+    }
+
+    fn prune(directory: &Path) {
+        let Ok(entries) = std::fs::read_dir(directory) else {
+            return;
+        };
+
+        let now = SystemTime::now();
+        let mut files: Vec<(SystemTime, PathBuf)> = entries
+            .flatten()
+            .filter_map(|entry| {
+                let modified = entry.metadata().ok()?.modified().ok()?;
+                Some((modified, entry.path()))
+            })
+            .collect();
+
+        files.sort_by_key(|entry| entry.0);
+
+        for (modified, path) in &files {
+            if now.duration_since(*modified).is_ok_and(|age| age > MAX_AGE) {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+
+        let excess = files.len().saturating_sub(MAX_ENTRIES);
+
+        for (_, path) in files.iter().take(excess) {
+            let _ = std::fs::remove_file(path);
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        fn icon() -> Icon {
+            Icon {
+                width: 2,
+                height: 1,
+                rgba: vec![1, 2, 3, 4, 5, 6, 7, 8],
+            }
+        }
+
+        #[test]
+        fn cache_round_trips() {
+            let original = icon();
+            let decoded = decode(&encode(&original)).expect("encoded icon should decode");
+
+            assert_eq!(decoded.width, original.width);
+            assert_eq!(decoded.height, original.height);
+            assert_eq!(decoded.rgba, original.rgba);
+        }
+
+        #[test]
+        fn damaged_entries_are_ignored() {
+            assert!(decode(b"PIRSAIC1").is_none());
+            assert!(decode(b"not an icon at all").is_none());
+
+            let mut bytes = encode(&icon());
+            bytes.push(0);
+
+            assert!(decode(&bytes).is_none());
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -222,8 +431,8 @@ mod tests {
 
         assert_eq!(icons.len(), 1, "notepad.exe should have an icon");
 
-        let (name, icon) = &icons[0];
-        assert_eq!(name, "Notepad");
+        let (key, icon) = &icons[0];
+        assert_eq!(key, "notepad", "icons are keyed by the search key");
         assert!(icon.width > 0 && icon.height > 0);
         assert_eq!(
             icon.rgba.len(),

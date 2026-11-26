@@ -26,6 +26,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
     TranslateMessage, WM_APP, WM_HOTKEY,
 };
 
+use tokio::sync::oneshot;
+
 use pirsa_core::HotkeyStatus;
 use pirsa_core::settings::HotkeyChoice;
 use pirsa_core::util::log;
@@ -38,7 +40,7 @@ const CHANGE_TIMEOUT: Duration = Duration::from_millis(1_500);
 
 static STATUS: AtomicU8 = AtomicU8::new(HotkeyStatus::Pending as u8);
 static THREAD_ID: AtomicU32 = AtomicU32::new(0);
-static PENDING: Mutex<Option<(HotkeyChoice, mpsc::Sender<HotkeyStatus>)>> = Mutex::new(None);
+static PENDING: Mutex<Option<(HotkeyChoice, oneshot::Sender<HotkeyStatus>)>> = Mutex::new(None);
 
 pub fn status() -> HotkeyStatus {
     match STATUS.load(Ordering::Relaxed) {
@@ -77,7 +79,10 @@ pub fn start(initial: HotkeyChoice) -> HotkeyStatus {
 /// Returns `Ready` when the new binding was registered. If Windows rejects it
 /// (usually because another app owns the same combination), the previous
 /// binding is restored and `Unavailable` is returned.
-pub fn set(choice: HotkeyChoice) -> HotkeyStatus {
+///
+/// This is asynchronous on purpose: the caller runs on the UI thread, and the
+/// change round-trips through the hotkey thread's message loop.
+pub async fn set(choice: HotkeyChoice) -> HotkeyStatus {
     let thread_id = THREAD_ID.load(Ordering::Relaxed);
 
     if thread_id == 0 {
@@ -85,7 +90,7 @@ pub fn set(choice: HotkeyChoice) -> HotkeyStatus {
         return HotkeyStatus::Unavailable;
     }
 
-    let (sender, receiver) = mpsc::channel();
+    let (sender, receiver) = oneshot::channel();
     *pending() = Some((choice, sender));
 
     let posted =
@@ -99,13 +104,20 @@ pub fn set(choice: HotkeyChoice) -> HotkeyStatus {
         return HotkeyStatus::Unavailable;
     }
 
-    receiver.recv_timeout(CHANGE_TIMEOUT).unwrap_or_else(|_| {
-        log("hotkey thread did not answer the change request");
-        HotkeyStatus::Unavailable
-    })
+    match tokio::time::timeout(CHANGE_TIMEOUT, receiver).await {
+        Ok(Ok(status)) => status,
+        Ok(Err(_)) => {
+            log("the hotkey thread dropped its change reply");
+            HotkeyStatus::Unavailable
+        }
+        Err(_) => {
+            log("hotkey thread did not answer the change request");
+            HotkeyStatus::Unavailable
+        }
+    }
 }
 
-fn pending() -> MutexGuard<'static, Option<(HotkeyChoice, mpsc::Sender<HotkeyStatus>)>> {
+fn pending() -> MutexGuard<'static, Option<(HotkeyChoice, oneshot::Sender<HotkeyStatus>)>> {
     PENDING.lock().unwrap_or_else(|poison| poison.into_inner())
 }
 

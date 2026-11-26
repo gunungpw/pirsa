@@ -1,4 +1,4 @@
-﻿//! Native Win32 window positioning, focus, and visibility helpers.
+//! Native Win32 window positioning, focus, and visibility helpers.
 //!
 //! iced's `window::set_mode` updates its own visibility state, while these
 //! helpers handle the native side: centering on the active monitor, reliable
@@ -6,22 +6,20 @@
 
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicIsize, Ordering};
-use std::time::Duration;
 
-use windows::Win32::Foundation::{HWND, POINT, RECT};
+use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Gdi::{
     GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
 };
 use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, VK_MENU,
-    keybd_event, mouse_event,
+    KEYBD_EVENT_FLAGS, KEYEVENTF_KEYUP, VK_MENU, keybd_event,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    BringWindowToTop, GetCursorPos, GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId,
-    HWND_NOTOPMOST, HWND_TOPMOST, IsWindowVisible, SW_HIDE, SW_SHOWNORMAL, SWP_HIDEWINDOW,
-    SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SetCursorPos,
-    SetForegroundWindow, SetWindowPos, ShowWindow, SwitchToThisWindow,
+    BringWindowToTop, GetForegroundWindow, GetWindowRect, GetWindowThreadProcessId, HWND_NOTOPMOST,
+    HWND_TOPMOST, IsWindowVisible, SW_HIDE, SW_SHOWNORMAL, SWP_HIDEWINDOW, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER, SWP_SHOWWINDOW, SetForegroundWindow, SetWindowPos,
+    ShowWindow, SwitchToThisWindow,
 };
 
 use pirsa_core::util::log;
@@ -107,14 +105,6 @@ fn activate(hwnd: HWND) -> bool {
 
         if GetForegroundWindow() != hwnd {
             alt_focus(hwnd);
-        }
-
-        // Some shell surfaces (notably Windows Search) deny programmatic
-        // foreground activation even through the fallbacks above. A synthetic
-        // click inside our own search field is treated as real user input and
-        // reliably activates the launcher.
-        if GetForegroundWindow() != hwnd {
-            click_focus(hwnd);
         }
 
         let focused = GetForegroundWindow() == hwnd;
@@ -253,70 +243,16 @@ fn force_foreground(hwnd: HWND) {
 /// Windows' foreground lock can reject activation from a background process.
 /// A synthetic Alt press is the standard way to satisfy the foreground lock
 /// without affecting the focused application.
+///
+/// This used to be followed by a synthetic click inside the window, which moved
+/// the user's cursor and could click whatever ended up under that point. The
+/// Alt press is enough to satisfy the lock; if even that fails the window stays
+/// visible and the periodic re-focus retry takes over.
 fn alt_focus(hwnd: HWND) {
     unsafe {
         keybd_event(VK_MENU.0 as u8, 0, KEYBD_EVENT_FLAGS(0), 0);
         let _ = SetForegroundWindow(hwnd);
         keybd_event(VK_MENU.0 as u8, 0, KEYEVENTF_KEYUP, 0);
         log("focused via synthetic Alt key");
-    }
-}
-
-fn click_focus(hwnd: HWND) {
-    unsafe {
-        let mut rect = RECT::default();
-        if GetWindowRect(hwnd, &mut rect).is_err() {
-            return;
-        }
-
-        let x = rect.left + (rect.right - rect.left) / 2;
-        // The borderless search row occupies roughly the top 3–13% of the
-        // window. Aim at 8% so the click lands in the input, not on a row.
-        let y = rect.top + (rect.bottom - rect.top) * 8 / 100;
-
-        let mut previous_cursor = POINT::default();
-        if GetCursorPos(&mut previous_cursor).is_err() {
-            return;
-        }
-
-        // Only raise the window if another surface still owns the foreground.
-        let needs_raise = GetForegroundWindow() != hwnd;
-
-        if needs_raise {
-            let _ = SetWindowPos(
-                hwnd,
-                Some(HWND_TOPMOST),
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
-            );
-        }
-
-        if SetCursorPos(x, y).is_ok() {
-            // Give the queued motion a moment to land before dispatching the
-            // button events; otherwise the click can be resolved at the old
-            // cursor position.
-            std::thread::sleep(Duration::from_millis(15));
-            mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
-            std::thread::sleep(Duration::from_millis(10));
-            mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
-            std::thread::sleep(Duration::from_millis(20));
-            let _ = SetCursorPos(previous_cursor.x, previous_cursor.y);
-            log("focused via synthetic click in the search field");
-        }
-
-        if needs_raise {
-            let _ = SetWindowPos(
-                hwnd,
-                Some(HWND_NOTOPMOST),
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
-            );
-        }
     }
 }
