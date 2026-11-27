@@ -6,7 +6,7 @@ use pirsa_core::search_scope::DriveKind;
 use pirsa_core::settings::Settings;
 
 fn empty_scope() -> &'static SearchScope {
-    static SCOPE: std::sync::OnceLock<SearchScope> = std::sync::OnceLock::new();
+    static SCOPE: OnceLock<SearchScope> = OnceLock::new();
 
     SCOPE.get_or_init(SearchScope::default)
 }
@@ -173,6 +173,7 @@ fn settings_state<'a>(
 ) -> SettingsView<'a> {
     SettingsView {
         settings,
+        fonts: FontChoice::ALL,
         scope,
         drives,
         exclude_draft: "",
@@ -181,6 +182,50 @@ fn settings_state<'a>(
         notice,
         category,
     }
+}
+
+#[test]
+fn emphasis_weights_preserve_installed_families() {
+    use iced::font::{Family, Weight};
+
+    let segoe = semibold_font(Font::with_name("Segoe UI"));
+    assert_eq!(segoe.weight, Weight::Semibold);
+
+    for family in ["Arial", "Consolas", "Georgia"] {
+        let emphasized = semibold_font(Font::with_name(family));
+
+        assert_eq!(
+            emphasized.weight,
+            Weight::Medium,
+            "{family} needs a weight that keeps its family"
+        );
+        assert_eq!(emphasized.family, Family::Name(family));
+    }
+
+    // Segoe UI Variable is registered at 400/500 only.
+    let variable = semibold_font(Font::with_name("Segoe UI Variable"));
+    assert_eq!(variable.weight, Weight::Medium);
+    assert_eq!(
+        bold_font(Font::with_name("Segoe UI Variable")).weight,
+        Weight::Medium
+    );
+}
+
+#[test]
+fn available_fonts_only_contain_real_choices() {
+    let available = available_fonts();
+
+    assert!(!available.is_empty(), "the system should expose some fonts");
+    assert!(
+        available.contains(&FontChoice::SegoeUi),
+        "Segoe UI is part of Windows"
+    );
+    assert!(
+        available
+            .iter()
+            .all(|choice| FontChoice::ALL.contains(choice)),
+        "the picker must not invent font choices"
+    );
 }
 
 #[test]

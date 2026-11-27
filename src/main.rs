@@ -42,8 +42,9 @@ fn main() -> iced::Result {
 
     let default_font = Font::with_name(settings.font.name());
     let boot_settings = settings.clone();
+    let local_fonts = platform::local_fonts();
 
-    iced::daemon(
+    let mut daemon = iced::daemon(
         move || Launcher::boot(boot_settings.clone()),
         Launcher::update,
         Launcher::view,
@@ -52,6 +53,12 @@ fn main() -> iced::Result {
     .subscription(Launcher::subscription)
     .theme(|state: &Launcher, _window: window::Id| Some(state.window_theme()))
     .default_font(default_font)
-    .antialiasing(true)
-    .run()
+    .antialiasing(true);
+
+    // Families in ~/.local/share/fonts are loaded alongside the system fonts.
+    for font in &local_fonts.files {
+        daemon = daemon.font(font.as_slice());
+    }
+
+    daemon.run()
 }

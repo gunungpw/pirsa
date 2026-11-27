@@ -11,6 +11,7 @@ impl Launcher {
         if self.settings_window == Some(window) {
             ui::settings_view(ui::SettingsView {
                 settings: &self.settings,
+                fonts: available_fonts(),
                 scope: &self.scope,
                 drives: &self.drives,
                 exclude_draft: &self.exclude_draft,

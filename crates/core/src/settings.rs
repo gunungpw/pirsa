@@ -26,6 +26,12 @@ pub enum FontChoice {
     Tahoma,
     TrebuchetMs,
     Verdana,
+    /// A font family loaded from the user's local font directory
+    /// (`~/.local/share/fonts`).
+    Custom {
+        family: &'static str,
+        key: &'static str,
+    },
 }
 
 impl FontChoice {
@@ -63,6 +69,7 @@ impl FontChoice {
             Self::Tahoma => "Tahoma",
             Self::TrebuchetMs => "Trebuchet MS",
             Self::Verdana => "Verdana",
+            Self::Custom { family, .. } => family,
         }
     }
 
@@ -82,11 +89,31 @@ impl FontChoice {
             Self::Tahoma => "tahoma",
             Self::TrebuchetMs => "trebuchet-ms",
             Self::Verdana => "verdana",
+            Self::Custom { key, .. } => key,
         }
     }
 
+    /// Creates a choice for a font family discovered in the user's local font
+    /// directory. The family name is kept for the lifetime of the process so
+    /// it can feed `iced::Font::with_name`, which requires `'static` names.
+    #[must_use]
+    pub fn custom(family: &str) -> Self {
+        let family = Box::leak(family.trim().to_owned().into_boxed_str());
+        let key = Box::leak(format!("custom:{family}").into_boxed_str());
+
+        Self::Custom { family, key }
+    }
+
     fn from_key(value: &str) -> Option<Self> {
-        let normalized = value.trim().to_ascii_lowercase().replace(' ', "-");
+        let value = value.trim();
+
+        if let Some(family) = value.strip_prefix("custom:") {
+            let family = family.trim();
+
+            return (!family.is_empty()).then(|| Self::custom(family));
+        }
+
+        let normalized = value.to_ascii_lowercase().replace(' ', "-");
 
         Self::ALL
             .iter()
@@ -390,6 +417,46 @@ impl Settings {
             util::log(format!("could not save settings: {error}"));
         }
     }
+
+    /// Replaces font choices that are not in `available` with the first
+    /// available choice. Returns `true` when a value changed.
+    ///
+    /// Settings can outlive an uninstalled font. Applying such a family
+    /// silently falls back to Segoe UI, which makes the font picker look
+    /// broken, so the launcher normalizes the stored choices first.
+    pub fn use_available_fonts(&mut self, available: &[FontChoice]) -> bool {
+        let Some(fallback) = available.first().copied() else {
+            return false;
+        };
+
+        let mut changed = false;
+
+        for font in [
+            &mut self.font,
+            &mut self.app_name_font,
+            &mut self.category_font,
+        ] {
+            if available.contains(font) {
+                continue;
+            }
+
+            // A built-in choice can point at the same family as a font loaded
+            // from the local directory (or vice versa). Keep the family when
+            // it is available under another choice.
+            if let Some(replacement) = available
+                .iter()
+                .find(|choice| choice.name().eq_ignore_ascii_case(font.name()))
+            {
+                *font = *replacement;
+            } else {
+                *font = fallback;
+            }
+
+            changed = true;
+        }
+
+        changed
+    }
 }
 
 fn settings_path() -> PathBuf {
@@ -438,6 +505,23 @@ mod tests {
         let loaded = Settings::load_from(&path);
 
         assert_eq!(loaded, settings);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn custom_fonts_round_trip() {
+        let path = temp_path();
+        let settings = Settings {
+            app_name_font: FontChoice::custom("JetBrains Mono"),
+            ..Settings::default()
+        };
+
+        settings.save_to(&path);
+        let loaded = Settings::load_from(&path);
+
+        assert_eq!(loaded.app_name_font, settings.app_name_font);
+        assert_eq!(loaded.app_name_font.name(), "JetBrains Mono");
+        assert_eq!(loaded.app_name_font.key(), "custom:JetBrains Mono");
         let _ = std::fs::remove_file(path);
     }
 
@@ -512,5 +596,70 @@ mod tests {
 
         assert_eq!(labels.len(), HotkeyChoice::ALL.len());
         assert_eq!(keys.len(), HotkeyChoice::ALL.len());
+    }
+
+    #[test]
+    fn unavailable_fonts_are_replaced_with_an_installed_one() {
+        let mut settings = Settings {
+            font: FontChoice::CascadiaMono,
+            app_name_font: FontChoice::CascadiaCode,
+            category_font: FontChoice::Arial,
+            ..Settings::default()
+        };
+
+        let changed = settings.use_available_fonts(&[FontChoice::SegoeUi, FontChoice::Arial]);
+
+        assert!(changed);
+        assert_eq!(settings.font, FontChoice::SegoeUi);
+        assert_eq!(settings.app_name_font, FontChoice::SegoeUi);
+        assert_eq!(settings.category_font, FontChoice::Arial);
+    }
+
+    #[test]
+    fn available_fonts_are_kept() {
+        let mut settings = Settings::default();
+        let original = settings.clone();
+
+        assert!(!settings.use_available_fonts(&[FontChoice::SegoeUi, FontChoice::Georgia]));
+        assert_eq!(settings, original);
+    }
+
+    #[test]
+    fn local_font_choices_are_kept_when_available() {
+        let custom = FontChoice::custom("JetBrains Mono");
+        let mut settings = Settings {
+            app_name_font: custom,
+            ..Settings::default()
+        };
+
+        assert!(!settings.use_available_fonts(&[FontChoice::SegoeUi, custom]));
+        assert_eq!(settings.app_name_font, custom);
+    }
+
+    #[test]
+    fn a_local_font_can_replace_a_builtin_with_the_same_family() {
+        let local = FontChoice::custom("Cascadia Code");
+        let mut settings = Settings {
+            app_name_font: FontChoice::CascadiaCode,
+            ..Settings::default()
+        };
+
+        let changed = settings.use_available_fonts(&[FontChoice::SegoeUi, local]);
+
+        assert!(changed);
+        assert_eq!(settings.app_name_font, local);
+        assert_eq!(settings.app_name_font.name(), "Cascadia Code");
+    }
+
+    #[test]
+    fn no_available_fonts_leaves_settings_alone() {
+        let mut settings = Settings {
+            app_name_font: FontChoice::Georgia,
+            ..Settings::default()
+        };
+        let original = settings.clone();
+
+        assert!(!settings.use_available_fonts(&[]));
+        assert_eq!(settings, original);
     }
 }

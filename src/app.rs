@@ -2,6 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 use iced::futures::{StreamExt, stream};
@@ -17,7 +18,7 @@ use pirsa_core::results;
 use pirsa_core::results::ResultRow;
 use pirsa_core::search;
 use pirsa_core::search_scope::{DriveDetails, DriveMode, IndexStatus, SearchScope};
-use pirsa_core::settings::{HotkeyChoice, Settings, ThemeChoice};
+use pirsa_core::settings::{FontChoice, HotkeyChoice, Settings, ThemeChoice};
 use pirsa_core::usage::Usage;
 use pirsa_core::util;
 use pirsa_core::{AppEntry, HotkeyStatus, Icon, ScanResult};
@@ -514,6 +515,13 @@ impl Launcher {
     }
 
     fn open_settings(&mut self) -> Task<Message> {
+        // A saved font may no longer be installed. Normalize before the
+        // pickers are built so they only show working choices.
+        if self.settings.use_available_fonts(available_fonts()) {
+            self.settings.save();
+            util::log("configured fonts are not installed; using available fonts");
+        }
+
         // Drives can be plugged in after boot, so refresh before showing the
         // scope controls.
         self.drives = platform::drives::list();
@@ -965,6 +973,28 @@ impl Launcher {
             _ => Task::none(),
         }
     }
+}
+
+/// Installed system fonts plus families loaded from `~/.local/share/fonts`.
+///
+/// Cached because the settings view asks for the list on every frame.
+fn available_fonts() -> &'static [FontChoice] {
+    static FONTS: OnceLock<Vec<FontChoice>> = OnceLock::new();
+
+    FONTS.get_or_init(|| {
+        let mut fonts = ui::available_fonts().to_vec();
+
+        for choice in &platform::local_fonts().choices {
+            if !fonts
+                .iter()
+                .any(|font| font.name().eq_ignore_ascii_case(choice.name()))
+            {
+                fonts.push(*choice);
+            }
+        }
+
+        fonts
+    })
 }
 
 mod view;

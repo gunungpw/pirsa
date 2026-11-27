@@ -19,6 +19,7 @@ mod folders;
 mod hotkey;
 mod icons;
 mod instance;
+mod local_fonts;
 mod shell;
 mod tray;
 mod window_memory;
@@ -34,6 +35,7 @@ pub use folder_index::{
 pub use folder_picker::pick_async as pick_folder;
 pub use folders::{open_folder, search_async as live_folder_search};
 pub use hotkey::status as hotkey_status;
+pub use local_fonts::{LocalFonts, local_fonts};
 pub use shell::{extract_icons, scan};
 pub use window::show_fatal_error;
 

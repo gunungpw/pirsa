@@ -7,7 +7,7 @@ use iced::widget::{
 use iced::{Alignment, Element, Font, Length};
 
 use pirsa_core::search_scope::{DriveDetails, DriveKind, DriveMode};
-use pirsa_core::settings::{FontChoice, HotkeyChoice, ThemeChoice};
+use pirsa_core::settings::{HotkeyChoice, ThemeChoice};
 
 use super::style::*;
 use super::*;
@@ -15,6 +15,7 @@ use super::*;
 pub fn settings_view<'a>(view: SettingsView<'a>) -> Element<'a, SettingsMessage> {
     let SettingsView {
         settings,
+        fonts,
         scope,
         drives,
         exclude_draft,
@@ -29,19 +30,15 @@ pub fn settings_view<'a>(view: SettingsView<'a>) -> Element<'a, SettingsMessage>
     let app_name_font = Font::with_name(settings.app_name_font.name());
     let category_font = Font::with_name(settings.category_font.name());
 
-    let font_picker = pick_list(
-        FontChoice::ALL,
-        Some(settings.font),
-        SettingsMessage::FontChanged,
-    )
-    .text_size(14)
-    .padding([8, 10])
-    .font(font)
-    .width(Length::Fill)
-    .style(pick_list_style);
+    let font_picker = pick_list(fonts, Some(settings.font), SettingsMessage::FontChanged)
+        .text_size(14)
+        .padding([8, 10])
+        .font(font)
+        .width(Length::Fill)
+        .style(pick_list_style);
 
     let app_name_font_picker = pick_list(
-        FontChoice::ALL,
+        fonts,
         Some(settings.app_name_font),
         SettingsMessage::AppNameFontChanged,
     )
@@ -52,7 +49,7 @@ pub fn settings_view<'a>(view: SettingsView<'a>) -> Element<'a, SettingsMessage>
     .style(pick_list_style);
 
     let category_font_picker = pick_list(
-        FontChoice::ALL,
+        fonts,
         Some(settings.category_font),
         SettingsMessage::CategoryFontChanged,
     )
@@ -116,7 +113,7 @@ pub fn settings_view<'a>(view: SettingsView<'a>) -> Element<'a, SettingsMessage>
     .style(primary_button_style);
 
     let appearance = settings_pane(
-        "Fonts and colors for the launcher.",
+        "Fonts and colors for the launcher. Custom fonts come from ~/.local/share/fonts.",
         vec![
             settings_field(
                 "UI font",

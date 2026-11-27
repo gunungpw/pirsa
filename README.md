@@ -226,9 +226,15 @@ has two columns — the categories **Appearance**, **Behavior**,
 **Folder search**, and **Preview** on the left, and the settings of the selected
 category on the right — and you can change:
 
-- **UI font** — Segoe UI, Segoe UI Variable, Arial, Calibri, Cambria, Cascadia
-  Code, Cascadia Mono, Consolas, Georgia, Microsoft YaHei, Tahoma, Trebuchet MS,
-  or Verdana.
+- **UI font** — the supported families installed on this machine: Segoe UI,
+  Segoe UI Variable, Arial, Calibri, Cambria, Cascadia Code, Cascadia Mono,
+  Consolas, Georgia, Microsoft YaHei, Tahoma, Trebuchet MS, or Verdana. Missing
+  families are hidden, and a saved choice that is no longer installed falls back
+  to an available font.
+- **Local fonts** — font files in `~/.local/share/fonts` (on Windows,
+  `%USERPROFILE%\.local\share\fonts`) are loaded at startup and their families
+  appear in all three font pickers. Restart Pirsa after adding or removing files
+  there.
 - **App name font** — a separate font for application names in the result list.
 - **Category font** — a separate font for the category/detail text beside app
   names.
@@ -303,6 +309,7 @@ crates/
       folder_index.rs  persistent folder index, cache, background builder
       folder_picker.rs native folder picker for the search scope
       hotkey.rs        global hotkey via RegisterHotKey, changeable at runtime
+      local_fonts.rs   loads custom fonts from ~/.local/share/fonts
       instance.rs      named mutex + named show/quit events
       shell.rs         dedicated shell workers for scans and icons
       tray.rs          notification-area icon and menu

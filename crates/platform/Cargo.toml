@@ -13,6 +13,7 @@ path = "src/lib.rs"
 [dependencies]
 pirsa-core.workspace = true
 tokio.workspace = true
+fontdb.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 windows.workspace = true

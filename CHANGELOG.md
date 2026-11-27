@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-11-28
+
+### Added
+
+- Font files in `~/.local/share/fonts` (on Windows,
+  `%USERPROFILE%\.local\share\fonts`) are loaded at startup and their families
+  appear in the UI, app-name, and category font pickers. Custom choices persist
+  as `custom:<family>` in `settings.txt`.
+
+### Fixed
+
+- App-name, folder-name, and other emphasized text now keep the selected font
+  family. Fonts without a semibold face used to fall back to Segoe UI Semibold,
+  so changing the app-name font appeared to do nothing.
+- Font pickers only list families installed on the machine. A saved choice whose
+  font is no longer installed falls back to an available font when Settings
+  opens instead of silently rendering in Segoe UI.
+
 ## [0.11.0] - 2026-11-27
 
 ### Added

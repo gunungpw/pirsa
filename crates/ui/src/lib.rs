@@ -4,8 +4,9 @@
 //! [`launcher`], the settings window in [`settings`], and the widget styles in
 //! [`style`].
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
+use std::sync::OnceLock;
 
 use iced::widget::image::Handle;
 use iced::{Color, Font, Theme};
@@ -281,18 +282,67 @@ fn medium_font(font: Font) -> Font {
     }
 }
 
+/// Applies emphasis without losing the selected font family.
+///
+/// cosmic-text looks for a face with the exact requested weight before it
+/// considers the family. Only Segoe UI ships a real semibold (600) face; for
+/// every other family a 600 request falls back to Segoe UI Semibold, so the
+/// app-name font appears to be ignored. Medium (500) has no exact-weight face
+/// to hijack it, keeping the chosen family (including regular-only fonts from
+/// the local font directory).
 fn semibold_font(font: Font) -> Font {
-    Font {
-        weight: iced::font::Weight::Semibold,
-        ..font
-    }
+    let weight = match font.family {
+        iced::font::Family::Name("Segoe UI") => iced::font::Weight::Semibold,
+        _ => iced::font::Weight::Medium,
+    };
+
+    Font { weight, ..font }
 }
 
 fn bold_font(font: Font) -> Font {
-    Font {
-        weight: iced::font::Weight::Bold,
-        ..font
-    }
+    let weight = match font.family {
+        iced::font::Family::Name("Segoe UI") => iced::font::Weight::Bold,
+        _ => iced::font::Weight::Medium,
+    };
+
+    Font { weight, ..font }
+}
+
+/// Font choices whose family is installed on this system.
+///
+/// Offering a missing family is misleading: the text silently falls back to
+/// Segoe UI, so the picker appears to do nothing. The set is cached and reads
+/// the same font database iced uses for rendering.
+pub fn available_fonts() -> &'static [FontChoice] {
+    static AVAILABLE: OnceLock<Vec<FontChoice>> = OnceLock::new();
+
+    AVAILABLE.get_or_init(|| {
+        let installed = installed_families();
+        let fonts: Vec<FontChoice> = FontChoice::ALL
+            .iter()
+            .copied()
+            .filter(|choice| installed.contains(&choice.name().to_ascii_lowercase()))
+            .collect();
+
+        if fonts.is_empty() {
+            FontChoice::ALL.to_vec()
+        } else {
+            fonts
+        }
+    })
+}
+
+fn installed_families() -> HashSet<String> {
+    let mut font_system = iced::advanced::graphics::text::font_system()
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let database = font_system.raw().db_mut();
+
+    database
+        .faces()
+        .flat_map(|face| face.families.iter())
+        .map(|(name, _)| name.to_ascii_lowercase())
+        .collect()
 }
 
 /// Read-only state the settings window renders.
@@ -302,6 +352,8 @@ fn bold_font(font: Font) -> Font {
 #[derive(Debug, Clone, Copy)]
 pub struct SettingsView<'a> {
     pub settings: &'a Settings,
+    /// Font choices installed on this system; the pickers only offer these.
+    pub fonts: &'a [FontChoice],
     pub scope: &'a SearchScope,
     pub drives: &'a [DriveDetails],
     pub exclude_draft: &'a str,
