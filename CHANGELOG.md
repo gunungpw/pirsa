@@ -21,8 +21,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `:` trigger now searches the Turso file index rather than the legacy
   binary folder index. The default scope is all fixed drives; profile-only and
   selected-drive scopes remain available.
-- Index scope changes take effect after restarting Pirsa; **Rebuild** rescans
-  the current scope immediately.
+- Index scope changes take effect after restarting Pirsa. Until then the
+  settings window says a restart is pending, and **Rebuild** rescans the scope
+  the running index already loaded rather than pretending the new one is live.
 - File-mode rows now share one ranked list, so files and folders interleave by
   match quality and a folder launch records usage just like a file launch.
 - Index writes run below normal priority, and a very large scan is capped at

@@ -209,7 +209,10 @@ searches nothing. Typing pauses are debounced, and a newer query always wins
 over an older result.
 
 The index is a snapshot plus live watcher updates; a full reconciliation happens
-after a scope change or when the persisted index is older than six hours.
+after a scope change or when the persisted index is older than six hours. Scope
+edits are saved immediately but the running index keeps its old roots until
+Pirsa restarts; the settings window shows that reminder, and **Rebuild** uses
+the scope the running index loaded.
 
 ## Calculator and unit conversion
 
