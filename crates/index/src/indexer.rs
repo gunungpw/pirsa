@@ -130,6 +130,7 @@ pub(crate) async fn scan(
         }
         let _ = db::set_meta(&conn, "complete", "1").await;
         let _ = db::set_meta(&conn, "fingerprint", &config.fingerprint.to_string()).await;
+        let _ = db::set_meta(&conn, "exclusion_filter", "2").await;
         let _ = db::set_meta(&conn, "last_scan", &crate::now_secs().to_string()).await;
     }
 
@@ -215,15 +216,30 @@ pub(crate) async fn watch(
     status: Arc<RwLock<IndexStatus>>,
 ) {
     let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-    let mut watcher = match notify::recommended_watcher(move |event| {
-        let _ = sender.send(event);
-    }) {
-        Ok(watcher) => watcher,
-        Err(error) => {
-            pirsa_core::util::log(format!("could not start the file watcher: {error}"));
-            return;
-        }
-    };
+    let filter_config = config.clone();
+    let mut watcher =
+        match notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+            // Drop events that are wholly inside an excluded or system tree before
+            // they reach the async worker. Windows writes to AppData and Program
+            // Files constantly; queueing those paths would keep the indexer busy.
+            if let Ok(event) = &event
+                && !event.paths.is_empty()
+                && event
+                    .paths
+                    .iter()
+                    .all(|path| is_excluded_tree(path, &filter_config))
+            {
+                return;
+            }
+
+            let _ = sender.send(event);
+        }) {
+            Ok(watcher) => watcher,
+            Err(error) => {
+                pirsa_core::util::log(format!("could not start the file watcher: {error}"));
+                return;
+            }
+        };
 
     let mut has_watch = false;
     for root in &config.roots {
@@ -244,7 +260,9 @@ pub(crate) async fn watch(
         match event {
             Ok(Some(Ok(event))) => {
                 for path in event.paths {
-                    pending.insert(path);
+                    if !is_excluded_tree(&path, &config) {
+                        pending.insert(path);
+                    }
                 }
             }
             Ok(Some(Err(error))) => {
@@ -277,22 +295,33 @@ pub(crate) async fn watch(
     }
 }
 
-async fn apply_path(conn: &mut Connection, path: &Path, config: &IndexConfig) {
-    let key = db::path_key(path);
-    let name = path
-        .file_name()
-        .map(|name| name.to_string_lossy().to_lowercase())
-        .unwrap_or_default();
+/// Whether `path` or any of its ancestors is hidden, excluded, or a system
+/// directory.
+///
+/// The walker descends only through allowed directories, but filesystem events
+/// arrive with complete leaf paths, so checking the leaf name alone would let
+/// changes under `AppData`, `Program Files`, or an excluded project folder
+/// back into the index.
+fn is_excluded_tree(path: &Path, config: &IndexConfig) -> bool {
+    path.ancestors().any(|ancestor| {
+        let name = ancestor
+            .file_name()
+            .map(|name| name.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
 
-    // A newly created file or folder must obey the same scope rules as the
-    // full walk, including when it was indexed before the rules changed.
-    if config.scope.is_hidden_skipped(&name)
-        || SYSTEM_DIRECTORIES.contains(&name.as_str())
-        || config.scope.is_excluded(path)
-    {
-        let _ = db::delete_path(conn, &key).await;
+        !name.is_empty()
+            && (config.scope.is_hidden_skipped(&name)
+                || SYSTEM_DIRECTORIES.contains(&name.as_str())
+                || config.scope.is_excluded(ancestor))
+    })
+}
+
+async fn apply_path(conn: &mut Connection, path: &Path, config: &IndexConfig) {
+    if is_excluded_tree(path, config) {
         return;
     }
+
+    let key = db::path_key(path);
 
     match std::fs::metadata(path) {
         Ok(metadata) if metadata.is_dir() => {
@@ -373,9 +402,14 @@ mod tests {
         let mut writer = database.connect().unwrap();
         db::migrate(&writer).await.unwrap();
 
+        let scope = pirsa_core::search_scope::SearchScope {
+            exclude: Vec::new(),
+            include_hidden: true,
+            ..pirsa_core::search_scope::SearchScope::default()
+        };
         let config = IndexConfig {
             roots: vec![root],
-            scope: pirsa_core::search_scope::SearchScope::default(),
+            scope,
             fingerprint: 1,
         };
         apply_path(&mut writer, &copied, &config).await;
@@ -386,6 +420,72 @@ mod tests {
                 .any(|hit| hit.name() == "copied" && hit.is_dir()),
             "the new directory is searchable, not just its contents"
         );
+    }
+
+    #[tokio::test]
+    async fn watcher_updates_ignore_excluded_ancestors() {
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().join("root");
+        let cached = root.join("ignored-cache").join("cache.txt");
+        let notes = root.join("Documents").join("notes.txt");
+        std::fs::create_dir_all(cached.parent().unwrap()).unwrap();
+        std::fs::create_dir_all(notes.parent().unwrap()).unwrap();
+        std::fs::write(&cached, b"cache").unwrap();
+        std::fs::write(&notes, b"notes").unwrap();
+
+        let db_path = directory.path().join("index.db");
+        let database = db::open(&db_path).await.unwrap();
+        let mut writer = database.connect().unwrap();
+        db::migrate(&writer).await.unwrap();
+
+        let scope = pirsa_core::search_scope::SearchScope {
+            exclude: vec!["ignored-cache".to_owned()],
+            include_hidden: true,
+            ..pirsa_core::search_scope::SearchScope::default()
+        };
+        let config = IndexConfig {
+            roots: vec![root],
+            scope,
+            fingerprint: 1,
+        };
+
+        apply_path(&mut writer, &cached, &config).await;
+        apply_path(&mut writer, &notes, &config).await;
+
+        let cache_hits = db::search(&writer, "cache", 10).await.unwrap();
+        assert!(
+            cache_hits.is_empty(),
+            "a file under an excluded ancestor must not be indexed by a watcher event"
+        );
+
+        let note_hits = db::search(&writer, "notes", 10).await.unwrap();
+        assert!(
+            note_hits.iter().any(|hit| hit.name() == "notes.txt"),
+            "normal watcher events still update the index"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn excluded_ancestors_are_recognized() {
+        let config = IndexConfig {
+            roots: vec![PathBuf::from("C:\\")],
+            scope: pirsa_core::search_scope::SearchScope::default(),
+            fingerprint: 1,
+        };
+
+        assert!(is_excluded_tree(
+            Path::new("C:\\Users\\me\\AppData\\Local\\cache.bin"),
+            &config
+        ));
+        assert!(is_excluded_tree(
+            Path::new("C:\\Program Files\\App\\tool.exe"),
+            &config
+        ));
+        assert!(!is_excluded_tree(
+            Path::new("C:\\Users\\me\\Documents\\notes.txt"),
+            &config
+        ));
     }
 
     #[test]

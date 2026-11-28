@@ -179,7 +179,7 @@ async fn run(
     let writer = Arc::new(Mutex::new(writer));
     let scanning = Arc::new(AtomicBool::new(false));
 
-    let (complete, fingerprint, last_scan) = {
+    let (complete, fingerprint, exclusion_filter) = {
         let connection = writer.lock().await;
         let complete = db::get_meta(&connection, "complete")
             .await
@@ -191,19 +191,18 @@ async fn run(
             .await
             .ok()
             .flatten();
-        let last_scan = db::get_meta(&connection, "last_scan")
+        let exclusion_filter = db::get_meta(&connection, "exclusion_filter")
             .await
             .ok()
             .flatten()
-            .and_then(|value| value.parse::<i64>().ok())
-            .unwrap_or(0);
-        (complete, fingerprint, last_scan)
+            .as_deref()
+            == Some("2");
+        (complete, fingerprint, exclusion_filter)
     };
     let expected_fingerprint = config.fingerprint.to_string();
     let scope_changed = fingerprint.as_deref() != Some(expected_fingerprint.as_str());
-    let stale = crate::now_secs().saturating_sub(last_scan) > 6 * 60 * 60;
 
-    if complete && !scope_changed && !stale {
+    if complete && !scope_changed && exclusion_filter {
         let count = {
             let connection = writer.lock().await;
             db::count(&connection).await.unwrap_or(0)

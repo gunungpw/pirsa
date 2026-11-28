@@ -29,6 +29,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Index writes run below normal priority, and a very large scan is capped at
   2,000,000 entries so a pathological volume cannot fill the disk.
 
+### Fixed
+
+- Filesystem events inside excluded or system folders (AppData, Program Files,
+  Windows, excluded project folders) no longer enter the index. The watcher
+  delivered complete leaf paths, so the old leaf-name check let those writes
+  through and kept the indexer running at idle.
+- A persisted complete index is reused until the scope changes or the user
+  presses **Rebuild**. The previous six-hour full rescan could peg a core for
+  many minutes while Pirsa was idle.
+- The first start after this fix rebuilds once to remove entries that earlier
+  watcher events added from excluded folders.
+
 ### Removed
 
 - The legacy binary folder index (`folders.index`) and its bounded live
