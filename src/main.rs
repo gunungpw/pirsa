@@ -34,6 +34,10 @@ fn main() -> iced::Result {
         ));
     }));
 
+    if let Some(directory) = util::data_directory() {
+        util::log(format!("data directory: {}", directory.display()));
+    }
+
     let settings = Settings::load();
     let hotkey = platform::init(settings.hotkey);
     let show_on_start =

@@ -3,10 +3,14 @@
 use windows::Win32::Storage::FileSystem::{
     GetDiskFreeSpaceExW, GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW,
 };
-use windows::Win32::System::WindowsProgramming::{DRIVE_FIXED, DRIVE_REMOTE, DRIVE_REMOVABLE};
 use windows::core::PCWSTR;
 
 use pirsa_core::search_scope::{DriveDetails, DriveInfo, DriveKind};
+
+// The Win32 drive-type values returned by GetDriveTypeW.
+const DRIVE_REMOVABLE: u32 = 2;
+const DRIVE_FIXED: u32 = 3;
+const DRIVE_REMOTE: u32 = 4;
 
 /// Lists attached drives, sorted by letter. CD-ROM and unknown device types are
 /// skipped because they cannot be searched.

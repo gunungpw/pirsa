@@ -9,9 +9,9 @@ use crate::util::SearchText;
 pub enum LaunchTarget {
     /// A `.lnk` or `.url` file in a Start Menu folder.
     Shortcut(PathBuf),
-    /// An executable, usually reported by the AppsFolder namespace.
+    /// An executable path.
     Executable(PathBuf),
-    /// A shell path such as `shell:AppsFolder\Package!App`.
+    /// A shell target, such as an AppUserModelID or `shell:` path.
     Shell(String),
 }
 

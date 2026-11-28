@@ -3,26 +3,18 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use windows::Win32::Foundation::HWND;
-use windows::Win32::UI::Shell::Common::{ITEMIDLIST, STRRET};
-use windows::Win32::UI::Shell::{
-    ILFree, IShellFolder, SHCONTF_FOLDERS, SHCONTF_NONFOLDERS, SHGDN_FORPARSING, SHGDN_NORMAL,
-    SHGetDesktopFolder, SHParseDisplayName, StrRetToBufW,
-};
 use windows::Win32::UI::WindowsAndMessaging::SW_SHOWNORMAL;
-use windows::core::{PCWSTR, w};
+use windows::core::PCWSTR;
 
-use super::com::ComApartment;
 use pirsa_core::util::{is_noise_name, log, normalize_name};
 use pirsa_core::{AppEntry, LaunchTarget, ScanResult};
 
-/// Discovers Start Menu applications from both shortcut folders and the
-/// Windows `AppsFolder` shell namespace (which includes packaged/UWP apps).
+/// Discovers applications from the per-user and all-user Start Menu shortcut
+/// folders.
 ///
-/// Normally called by the scan worker; the COM guard also supports direct
-/// callers such as tests.
+/// Normally called by the scan worker; it is also safe to call directly from
+/// tests.
 pub(crate) fn scan() -> ScanResult {
-    let _com = ComApartment::new();
     let mut apps = Vec::new();
     let mut seen = HashSet::new();
     let mut warnings = Vec::new();
@@ -37,32 +29,6 @@ pub(crate) fn scan() -> ScanResult {
             "scanned shortcut root {} ({source})",
             root.display()
         ));
-    }
-
-    let shortcut_count = apps.len();
-
-    match scan_apps_folder_inner() {
-        Ok(folder_apps) => {
-            let mut added = 0;
-
-            for app in folder_apps {
-                let key = app.search_key();
-                if key.is_empty() || !seen.insert(key.to_owned()) {
-                    continue;
-                }
-
-                apps.push(app);
-                added += 1;
-            }
-
-            log(format!(
-                "AppsFolder added {added} apps ({shortcut_count} shortcuts found)"
-            ));
-        }
-        Err(error) => {
-            warnings.push(format!("Windows apps could not be indexed: {error}"));
-            log(format!("AppsFolder scan failed: {error}"));
-        }
     }
 
     apps.sort_by(|left, right| {
@@ -221,146 +187,6 @@ fn collect_shortcuts(
             category,
             LaunchTarget::Shortcut(path),
         ));
-    }
-}
-
-fn scan_apps_folder_inner() -> Result<Vec<AppEntry>, String> {
-    unsafe {
-        let desktop = SHGetDesktopFolder().map_err(|error| error.to_string())?;
-
-        let mut folder_pidl: *mut ITEMIDLIST = std::ptr::null_mut();
-        SHParseDisplayName(w!("shell:AppsFolder"), None, &raw mut folder_pidl, 0, None)
-            .map_err(|error| error.to_string())?;
-
-        if folder_pidl.is_null() {
-            return Err("AppsFolder returned an empty namespace.".to_owned());
-        }
-
-        let folder_result: Result<IShellFolder, _> = desktop.BindToObject(folder_pidl, None);
-        ILFree(Some(folder_pidl));
-        let folder = folder_result.map_err(|error| error.to_string())?;
-
-        let mut enumerator = None;
-        let flags = (SHCONTF_FOLDERS.0 | SHCONTF_NONFOLDERS.0) as u32;
-        let enumeration = folder.EnumObjects(HWND::default(), flags, &raw mut enumerator);
-
-        if enumeration.is_err() {
-            return Err(format!(
-                "Could not enumerate AppsFolder (HRESULT {:#x}).",
-                enumeration.0
-            ));
-        }
-
-        let enumerator =
-            enumerator.ok_or_else(|| "AppsFolder enumeration was empty.".to_owned())?;
-        let mut apps = Vec::new();
-        let mut seen = HashSet::new();
-        let mut enumerated = 0;
-
-        for _ in 0..5000 {
-            let mut item: *mut ITEMIDLIST = std::ptr::null_mut();
-            let mut item_slice = [item];
-            let next = enumerator.Next(&mut item_slice, None);
-            item = item_slice[0];
-
-            if item.is_null() || next.is_err() {
-                break;
-            }
-
-            enumerated += 1;
-
-            // Child PIDLs from EnumObjects are relative to the AppsFolder, so
-            // GetDisplayNameOf is the correct API here (SHGetNameFromIDList
-            // expects an absolute PIDL).
-            let display_name = folder_display_name(&folder, item, SHGDN_NORMAL);
-            let parsing_name = folder_display_name(&folder, item, SHGDN_FORPARSING);
-
-            ILFree(Some(item));
-
-            let (Some(display_name), Some(parsing_name)) = (display_name, parsing_name) else {
-                continue;
-            };
-
-            let display_name = display_name.trim();
-            let parsing_name = parsing_name.trim();
-
-            if display_name.is_empty()
-                || parsing_name.is_empty()
-                || display_name.starts_with('@')
-                || parsing_name.starts_with("http:")
-                || parsing_name.starts_with("https:")
-                || parsing_name.starts_with("mailto:")
-            {
-                continue;
-            }
-
-            let (target, detail) = classify_apps_folder_target(parsing_name);
-            let app = AppEntry::new(display_name.to_owned(), detail, target);
-            let key = app.search_key();
-
-            if key.is_empty() || is_noise_name(key) || !seen.insert(key.to_owned()) {
-                continue;
-            }
-
-            apps.push(app);
-        }
-
-        log(format!(
-            "enumerated {enumerated} AppsFolder items, keeping {}",
-            apps.len()
-        ));
-
-        Ok(apps)
-    }
-}
-
-fn classify_apps_folder_target(parsing_name: &str) -> (LaunchTarget, String) {
-    if parsing_name.starts_with("shell:") {
-        return (
-            LaunchTarget::Shell(parsing_name.to_owned()),
-            "Windows app".to_owned(),
-        );
-    }
-
-    let path = Path::new(parsing_name);
-
-    if path.is_absolute() {
-        let detail = if path.is_file() {
-            "Desktop app"
-        } else {
-            "Windows app"
-        };
-
-        return (
-            LaunchTarget::Executable(path.to_path_buf()),
-            detail.to_owned(),
-        );
-    }
-
-    (
-        LaunchTarget::Shell(format!("shell:AppsFolder\\{parsing_name}")),
-        "Windows app".to_owned(),
-    )
-}
-
-fn folder_display_name(
-    folder: &IShellFolder,
-    pidl: *const ITEMIDLIST,
-    flags: windows::Win32::UI::Shell::SHGDNF,
-) -> Option<String> {
-    unsafe {
-        let mut strret = STRRET::default();
-        folder.GetDisplayNameOf(pidl, flags, &raw mut strret).ok()?;
-
-        let mut buffer = [0_u16; 1024];
-        StrRetToBufW(&raw mut strret, Some(pidl), &mut buffer).ok()?;
-
-        let length = buffer
-            .iter()
-            .position(|character| *character == 0)
-            .unwrap_or(buffer.len());
-
-        String::from_utf16(&buffer[..length]).ok()
     }
 }
 

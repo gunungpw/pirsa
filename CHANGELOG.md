@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-11-28
+
+### Added
+
+- Startup log records the active `%LOCALAPPDATA%\Pirsa` data directory. The
+  installer now warns when run elevated, and the README explains that upgrades
+  keep settings, usage history, and the folder index.
+
+### Changed
+
+- Folder rows use a pre-rendered 24×24 RGBA folder icon instead of an SVG, so
+  iced's `svg` feature and its `resvg`/`usvg` dependency tree are no longer
+  needed.
+- The app-search placeholder now reads "Type to Search".
+
+### Removed
+
+- Store/UWP app discovery through the `shell:AppsFolder` namespace. Pirsa now
+  indexes only Start Menu `.lnk`/`.url` shortcuts.
+- The unused `Win32_UI_Shell_Common` and `Win32_System_WindowsProgramming`
+  Windows API features.
+
 ## [0.13.0] - 2026-11-28
 
 ### Changed

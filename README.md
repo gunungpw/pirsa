@@ -9,8 +9,7 @@ Repository: [github.com/gunungpw/pirsa](https://github.com/gunungpw/pirsa)
 ![Pirsa](docs/screenshot.png)
 
 Press **Alt+Space** (the default) anywhere to open it, type a few letters, press
-**Enter**. Pirsa searches the Start Menu (including Store/UWP apps) and gets out
-of the way.
+**Enter**. Pirsa searches the Start Menu and gets out of the way.
 
 ## Features
 
@@ -18,8 +17,7 @@ of the way.
   button. The global hotkey defaults to **Alt+Space** and can be changed in
   Settings.
 - **Start Menu search** — indexes both per-user and all-user Start Menu
-  shortcuts, plus the Windows `AppsFolder` namespace used by Store/UWP apps such
-  as Settings and Calculator.
+  shortcuts.
 - **Fuzzy matching** — prefix, substring, word-boundary, acronym (`vsc` →
   Visual Studio Code) and subsequence matches, ranked sensibly.
 - **Frequently used first** — apps you launch most often rise to the top of the
@@ -35,9 +33,9 @@ of the way.
   the trigger can be changed in **Settings → Folder search**. Enter opens the
   selected folder in Explorer. Folder rows use the Material Symbols folder icon.
 - **Real application icons** — every row shows the app's actual Windows icon,
-  read from the shell for both Start Menu shortcuts and Store apps, with a
-  colored initial tile only as a fallback. Icons are cached on disk, so later
-  launches only ask the shell about new or updated apps.
+  read from the shell for Start Menu shortcuts, with a colored initial tile only
+  as a fallback. Icons are cached on disk, so later launches only ask the shell
+  about new or updated apps.
 - **Keyboard-first** — arrow keys to move, Enter to launch, **Ctrl+1…8** to
   launch a row directly, **Tab** for Settings, Esc to hide. Uninstallers,
   readmes, and website shortcuts are filtered out of the app list.
@@ -129,6 +127,12 @@ script asks it to quit through its named quit event, waits for the process to
 exit, and only falls back to force-stopping it if it does not respond. The build
 happens before the running copy is touched, so a failed build leaves the
 existing installation running.
+
+Settings, usage history, and the folder index live in `%LOCALAPPDATA%\Pirsa`
+and are never touched by the installer. Run the script from a normal,
+non-elevated PowerShell: an elevated install belongs to the administrator
+profile, which has its own `%LOCALAPPDATA%` and therefore its own Pirsa data.
+The data directory in use is written to `launcher.log` at startup.
 
 The app lives in the notification area. Left-click the tray icon to open Pirsa,
 or right-click it for **Open** and **Quit**. You can also quit from the launcher
@@ -264,17 +268,14 @@ At startup Pirsa scans:
 
 1. `%APPDATA%\Microsoft\Windows\Start Menu\Programs`
 2. `%ProgramData%\Microsoft\Windows\Start Menu\Programs`
-3. The Windows `shell:AppsFolder` namespace via the Shell COM API
 
-Shortcuts are de-duplicated by display name, with Start Menu `.lnk`/`.url` files
-taking precedence. Support entries that are not applications — uninstallers,
-readmes, help files, release notes, licence files, and website shortcuts — are
-filtered out by whole-word match, so "Helper" and "Removeable Drive" survive.
-Store apps are launched through their AppUserModelID; desktop apps are launched
-through their shortcut or executable path.
+Shortcuts are de-duplicated by display name. Support entries that are not
+applications — uninstallers, readmes, help files, release notes, licence files,
+and website shortcuts — are filtered out by whole-word match, so "Helper" and
+"Removeable Drive" survive. Apps are launched through their Start Menu shortcut.
 
 On a typical development machine this indexes 140+ apps in well under a second.
-The scan runs on a dedicated STA worker thread, so the window appears while it
+The scan runs on a dedicated worker thread, so the window appears while it
 finishes; **F5** refreshes it (a refresh requested mid-scan is queued, not
 dropped). Extracted icons are cached under `%LOCALAPPDATA%\Pirsa\icons`, so the
 shell is only asked about new or updated apps.
@@ -319,7 +320,7 @@ crates/
       instance.rs      named mutex + named show/quit events
       shell.rs         dedicated shell workers for scans and icons
       tray.rs          notification-area icon and menu
-      apps.rs          Start Menu and AppsFolder scanning, ShellExecute
+      apps.rs          Start Menu scanning, ShellExecute
       folders.rs       bounded multi-root walk, ShellExecute open
       icons.rs         real app icon extraction via IShellItemImageFactory
       window.rs        show/hide, focus, monitor enumeration
@@ -333,7 +334,7 @@ crates/core/benches/rank.rs  criterion benchmark for the search ranking
 .github/workflows/ci.yml     fmt, clippy, tests, and benchmark build
 assets/
   andrsrxn--app-window.svg  source window glyph
-  material-symbols--folder.svg  folder result icon
+  material-symbols--folder.rgba  folder result icon (24x24 RGBA)
   pirsa-icon.svg            transparent Teal Light app icon
   icon.png / icon.ico      generated icon assets
   icon-64.rgba              raw pixels used for the runtime window icon

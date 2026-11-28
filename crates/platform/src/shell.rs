@@ -1,10 +1,11 @@
 //! Dedicated shell workers.
 //!
-//! Start Menu enumeration and icon extraction are blocking COM/GDI work. Each
-//! runs on its own long-lived thread that initializes COM as STA, so executor
-//! threads stay free and a slow icon batch cannot delay a rescan. Results are
-//! returned through one-shot channels; the UI applies generation checks so a
-//! slow result cannot overwrite a newer one.
+//! Start Menu enumeration and icon extraction are blocking shell/GDI work. Each
+//! runs on its own long-lived thread, so executor threads stay free and a slow
+//! icon batch cannot delay a rescan. The icon worker initializes COM as STA;
+//! the scan worker only reads shortcut files. Results are returned through
+//! one-shot channels; the UI applies generation checks so a slow result cannot
+//! overwrite a newer one.
 
 use std::sync::OnceLock;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -98,8 +99,7 @@ fn start_worker<T: Send + 'static>(
 }
 
 fn run_scans(receiver: Receiver<oneshot::Sender<ScanResult>>) {
-    let com = ComApartment::new();
-    log_worker_start("scan", &com);
+    log("scan worker started");
 
     while let Ok(reply) = receiver.recv() {
         let started = Instant::now();

@@ -3,9 +3,10 @@
 use iced::border;
 use iced::widget::image::Handle;
 use iced::widget::text::Wrapping;
-use iced::widget::{
-    Image, Space, button, column, container, mouse_area, row, svg, text, text_input,
-};
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+
+use iced::widget::{Image, Space, button, column, container, mouse_area, row, text, text_input};
 use iced::{Alignment, Color, Element, Font, Length};
 
 use pirsa_core::calc::{CalcKind, CalcResult};
@@ -15,8 +16,10 @@ use pirsa_core::{AppEntry, LaunchTarget, ResultRow};
 use super::style::*;
 use super::*;
 
-/// Material Symbols folder glyph, centred in the same 30 px slot as app icons.
-const FOLDER_ICON: &[u8] = include_bytes!("../../../assets/material-symbols--folder.svg");
+/// Material Symbols folder glyph, pre-rendered as straight white RGBA with
+/// alpha coverage. It is tinted with the active accent at runtime.
+const FOLDER_ICON: &[u8] = include_bytes!("../../../assets/material-symbols--folder.rgba");
+const FOLDER_ICON_SIZE: u32 = 24;
 
 pub fn view(app: ViewState<'_>) -> Element<'_, Message> {
     let colors = Colors::from_theme(app.theme);
@@ -50,10 +53,7 @@ fn search_row(app: ViewState<'_>, colors: Colors, font: Font) -> Element<'_, Mes
     let placeholder = if folder_mode {
         "Search folders…".to_owned()
     } else {
-        format!(
-            "Search apps, calculate, convert…  ({} for folders)",
-            app.scope.trigger
-        )
+        "Type to Search".to_owned()
     };
     let field = text_input(&placeholder, app.query)
         .id(INPUT_ID)
@@ -537,12 +537,9 @@ fn icon_element<'a>(
 /// initial tile.
 fn folder_icon(colors: Colors) -> Element<'static, Message> {
     container(
-        svg(svg::Handle::from_memory(FOLDER_ICON))
+        Image::new(folder_icon_handle(colors.accent))
             .width(22)
-            .height(22)
-            .style(move |_theme, _status| svg::Style {
-                color: Some(colors.accent),
-            }),
+            .height(22),
     )
     .width(30)
     .height(30)
@@ -550,6 +547,34 @@ fn folder_icon(colors: Colors) -> Element<'static, Message> {
     .align_y(Alignment::Center)
     .style(folder_tile_style)
     .into()
+}
+
+fn folder_icon_handle(accent: Color) -> Handle {
+    static CACHE: OnceLock<Mutex<HashMap<[u8; 4], Handle>>> = OnceLock::new();
+
+    let accent = accent.into_rgba8();
+    let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+
+    if let Some(handle) = cache.get(&accent) {
+        return handle.clone();
+    }
+
+    let mut pixels = FOLDER_ICON.to_vec();
+
+    for pixel in pixels.chunks_mut(4) {
+        if pixel[3] > 0 {
+            pixel[0] = accent[0];
+            pixel[1] = accent[1];
+            pixel[2] = accent[2];
+        }
+    }
+
+    let handle = Handle::from_rgba(FOLDER_ICON_SIZE, FOLDER_ICON_SIZE, pixels);
+    cache.insert(accent, handle.clone());
+    handle
 }
 
 fn icon_tile(name: &str, colors: Colors, font: Font) -> Element<'_, Message> {
@@ -604,6 +629,6 @@ fn entry_kind(entry: &AppEntry) -> &'static str {
     match entry.target() {
         LaunchTarget::Shortcut(_) => "Application",
         LaunchTarget::Executable(_) => "Desktop app",
-        LaunchTarget::Shell(_) => "Store app",
+        LaunchTarget::Shell(_) => "Windows app",
     }
 }

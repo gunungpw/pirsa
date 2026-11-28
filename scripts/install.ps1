@@ -14,6 +14,15 @@ if ([string]::IsNullOrWhiteSpace($localAppData)) {
     throw 'Could not locate the local application data folder.'
 }
 
+# Pirsa is a per-user app. Settings, usage history, and the folder index live in
+# %LOCALAPPDATA%\Pirsa and are deliberately never touched by this script.
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$principal = [Security.Principal.WindowsPrincipal]::new($identity)
+
+if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Write-Warning "Pirsa is a per-user app. Run this script from a normal, non-elevated PowerShell so it uses your own LOCALAPPDATA. An elevated install belongs to the administrator profile and starts with a different Pirsa data folder."
+}
+
 $source = Join-Path $root 'target\release\pirsa.exe'
 $destination = Join-Path $localAppData 'Programs\Pirsa'
 $target = Join-Path $destination 'pirsa.exe'
