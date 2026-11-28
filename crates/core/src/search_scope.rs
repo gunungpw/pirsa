@@ -1,4 +1,4 @@
-//! Where folder search looks and what it skips.
+//! Where file search looks and what it skips.
 //!
 //! The scope is persisted in `%LOCALAPPDATA%\Pirsa\search.txt` as line-based
 //! `key=value` pairs, matching the launcher's other configuration files. The
@@ -19,7 +19,7 @@ pub const DEFAULT_DEPTH: usize = 6;
 pub const MIN_RESULTS: usize = 1;
 pub const MAX_RESULTS: usize = 16;
 pub const DEFAULT_RESULTS: usize = 8;
-/// The default prefix that switches a query into folder search.
+/// The default prefix that switches a query into file search.
 pub const DEFAULT_TRIGGER: &str = ":";
 /// Longest accepted trigger, in characters.
 pub const MAX_TRIGGER_LEN: usize = 8;
@@ -209,7 +209,7 @@ impl SearchScope {
         self.depth = depth.clamp(MIN_DEPTH, MAX_DEPTH);
     }
 
-    /// Sets the prefix that switches a query into folder search.
+    /// Sets the prefix that switches a query into file search.
     ///
     /// Returns false for an empty, overlong, whitespace-containing, or
     /// equals-containing value; the current trigger is left unchanged.
@@ -448,7 +448,7 @@ impl SearchScope {
     /// Renders the current format.
     #[must_use]
     pub fn render(&self) -> String {
-        let mut body = String::from("# Pirsa folder search scope\n");
+        let mut body = String::from("# Pirsa file search scope\n");
         body.push_str(&format!("version={VERSION}\n"));
         body.push_str(&format!("trigger={}\n", self.trigger));
         body.push_str(&format!("drives={}\n", self.drives.key()));

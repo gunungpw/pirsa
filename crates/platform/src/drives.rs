@@ -1,4 +1,4 @@
-//! Drive enumeration for the folder search scope.
+//! Drive enumeration for the file search scope.
 
 use windows::Win32::Storage::FileSystem::{
     GetDiskFreeSpaceExW, GetDriveTypeW, GetLogicalDrives, GetVolumeInformationW,
