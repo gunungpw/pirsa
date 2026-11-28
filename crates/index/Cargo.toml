@@ -1,0 +1,26 @@
+[package]
+name = "pirsa-index"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+description = "Durable Turso file index and instant search for Pirsa"
+
+[lib]
+name = "pirsa_index"
+path = "src/lib.rs"
+
+[dependencies]
+pirsa-core.workspace = true
+notify = "8"
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+turso = "=0.9.0-pre.6"
+
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

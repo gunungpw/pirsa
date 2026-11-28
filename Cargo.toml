@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/core",
+    "crates/index",
     "crates/platform",
     "crates/ui",
 ]
@@ -58,6 +59,7 @@ assert_is_empty = "allow"
 
 [workspace.dependencies]
 pirsa-core = { path = "crates/core" }
+pirsa-index = { path = "crates/index" }
 pirsa-platform = { path = "crates/platform" }
 pirsa-ui = { path = "crates/ui" }
 fontdb = "0.23"
@@ -102,6 +104,7 @@ path = "src/main.rs"
 
 [dependencies]
 pirsa-core.workspace = true
+pirsa-index.workspace = true
 pirsa-platform.workspace = true
 pirsa-ui.workspace = true
 iced.workspace = true

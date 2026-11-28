@@ -171,8 +171,8 @@ pub fn settings_view<'a>(view: SettingsView<'a>) -> Element<'a, SettingsMessage>
         font,
     );
 
-    let folder_search = settings_pane(
-        "How folder search is triggered and which folders it covers.",
+    let file_search = settings_pane(
+        "How file search is triggered and which folders it covers.",
         search_section_items(
             scope,
             trigger_draft,
@@ -229,7 +229,7 @@ pub fn settings_view<'a>(view: SettingsView<'a>) -> Element<'a, SettingsMessage>
     let detail: Element<'a, SettingsMessage> = match category {
         SettingsCategory::Appearance => appearance,
         SettingsCategory::Behavior => behavior,
-        SettingsCategory::FolderSearch => folder_search,
+        SettingsCategory::FileSearch => file_search,
         SettingsCategory::Preview => preview_pane,
     };
 
@@ -288,8 +288,8 @@ pub fn settings_view<'a>(view: SettingsView<'a>) -> Element<'a, SettingsMessage>
         .into()
 }
 
-/// Folder-search configuration: trigger, scope, drives, extra folders,
-/// exclusions, depth, hidden folders, and the index state.
+/// File-search configuration: trigger, scope, drives, extra folders,
+/// exclusions, depth, hidden entries, and the index state.
 fn search_section_items<'a>(
     scope: &'a SearchScope,
     trigger_draft: &'a str,
@@ -414,15 +414,15 @@ fn search_section_items<'a>(
     .width(Length::Fill);
 
     let hidden = checkbox(scope.include_hidden)
-        .label("Include hidden folders")
+        .label("Include hidden files and folders")
         .on_toggle(SettingsMessage::HiddenToggled)
         .text_size(12)
         .font(font);
 
     let status_text = if index_status.building {
-        format!("Indexing… {} folders so far", index_status.folders)
+        format!("Indexing… {} entries so far", index_status.entries)
     } else if index_status.ready {
-        format!("{} folders indexed", index_status.folders)
+        format!("{} entries indexed", index_status.entries)
     } else {
         "Index not built yet".to_owned()
     };
@@ -435,7 +435,7 @@ fn search_section_items<'a>(
     let items: Vec<Element<'a, SettingsMessage>> = vec![
         settings_field(
             "Trigger",
-            "Start a query with this to search folders only. Press Set; 1–8 characters, no spaces or =.",
+            "Start a query with this to search files and folders. Press Set; 1–8 characters, no spaces or =.",
             row![trigger_input, set_trigger]
                 .width(Length::Fill)
                 .spacing(6)
@@ -446,7 +446,7 @@ fn search_section_items<'a>(
         ),
         settings_field(
             "Scope",
-            "Which drives the folder index searches.",
+            "Which drives the file index searches.",
             preset_picker.into(),
             colors,
             font,

@@ -28,10 +28,10 @@ Press **Alt+Space** (the default) anywhere to open it, type a few letters, press
 - **Unit conversion** — type `1 inch` to see it converted to millimetres,
   centimetres, metres, feet, yards, miles and kilometres, or use
   `1 inch to cm` for a single target.
-- **Folder search** — start a query with the folder trigger (default `:`) to
-  search folders only, e.g. `:projects`. Plain queries search apps only, and
-  the trigger can be changed in **Settings → Folder search**. Enter opens the
-  selected folder in Explorer. Folder rows use the Material Symbols folder icon.
+- **File search** — prefix a query with the trigger (default `:`) to search
+  files and folders across the indexed drives, e.g. `:report`. The index is a
+  durable Turso database, ranked by match quality and usage history, and is
+  built in the background. Enter opens the selected file or folder.
 - **Real application icons** — every row shows the app's actual Windows icon,
   read from the shell for Start Menu shortcuts, with a colored initial tile only
   as a fallback. Icons are cached on disk, so later launches only ask the shell
@@ -128,7 +128,7 @@ exit, and only falls back to force-stopping it if it does not respond. The build
 happens before the running copy is touched, so a failed build leaves the
 existing installation running.
 
-Settings, usage history, and the folder index live in `%LOCALAPPDATA%\Pirsa`
+Settings, usage history, and the file index live in `%LOCALAPPDATA%\Pirsa`
 and are never touched by the installer. Run the script from a normal,
 non-elevated PowerShell: an elevated install belongs to the administrator
 profile, which has its own `%LOCALAPPDATA%` and therefore its own Pirsa data.
@@ -143,51 +143,52 @@ footer or with **Ctrl+Q** while it is focused.
 | Key / action | Result |
 | --- | --- |
 | `Alt+Space` (default) | Open or hide the launcher; configurable in Settings |
-| `:` (configurable) at the start | Search folders only |
+| `:` (configurable) at the start | Search files and folders |
 | `↑` / `↓` | Move the selection (the calculation card comes first) |
-| `Enter` | Copy the selected calculation, launch the selected app, or open the selected folder |
-| `Ctrl+1` … `Ctrl+8` | Launch the nth app row (or open the nth folder result) |
+| `Enter` | Copy the selected calculation, launch the selected app, or open the selected file or folder |
+| `Ctrl+1` … `Ctrl+8` | Launch the nth app row (or open the nth file result) |
 | `Tab` | Open the settings window |
 | `Esc` | Hide the launcher |
 | `Ctrl+Q` | Quit Pirsa |
 | `Ctrl+,` | Open the settings window |
 | `Esc` (Settings focused) | Close the settings window |
-| `F5` | Rescan the Start Menu and rebuild the folder index |
+| `F5` | Rescan the Start Menu and rebuild the file index |
 | Click a row | Launch that app, open that folder, or copy that calculation |
 | Drag the app-list heading | Move the window |
 | Tray icon left-click | Open Pirsa |
 | Tray icon right-click | Open, Settings, or quit Pirsa |
 
-## Folder search
+## File search
 
-Folder search is a separate mode. Prefix a query with the trigger — `:` by
-default — to search folders instead of apps:
+File search is a separate mode. Prefix a query with the trigger — `:` by
+default — to search files and folders instead of apps:
 
 ```text
 reports    apps whose name matches
-:reports   folders whose name matches
+:reports   files and folders whose name or path matches
 ```
 
-The trigger can be changed in **Settings → Folder search** to `>`, `::`, or
-any other short token (1–8 characters, no spaces or `=`). A plain query never
-searches folders, and a bare trigger shows a prompt.
+The trigger can be changed in **Settings → File search** to `>`, `::`, or any
+other short token (1–8 characters, no spaces or `=`). A plain query never
+touches the file index, and a bare trigger shows a prompt.
 
-Folder rows show the name and the last two folders of the path, and are marked
-**Folder** on the right. **Enter** (or a click) opens the folder in Explorer.
+File rows show the name and the last two folders of the path, and are marked
+**File** or **Folder** on the right. **Enter** (or a click) opens the selected
+item, and both kinds contribute to the usage history used for ranking.
 
-### What gets searched
+### What gets indexed
 
-Folder search is driven by a scope you configure in **Settings → Folder search**:
+File search is driven by a scope you configure in **Settings → File search**:
 
 | Setting | Meaning |
 | --- | --- |
-| **Trigger** | Prefix that switches a query to folder search (default `:`) |
-| **Scope** | Profile only (default) · Fixed drives · All drives · Selected drives |
+| **Trigger** | Prefix that switches a query to file search (default `:`) |
+| **Scope** | Fixed drives (default) · Profile only · All drives · Selected drives |
 | **Drives** | Tick the drives that participate; ticking one switches the scope to Selected |
 | **Extra folders** | Additional roots, added with the Windows folder picker |
 | **Excluded names or paths** | Whole names (`node_modules`), `*` globs (`temp*`), or path suffixes (`*\bin`) |
 | **Search depth** | 1–12 levels below each root |
-| **Include hidden folders** | Also index folders whose name starts with a dot |
+| **Include hidden files and folders** | Also index names starting with a dot |
 
 Exclusions always win over includes and drives, nested roots are deduplicated
 (`C:\` already covers `C:\Users\me\Projects`), and system locations
@@ -196,19 +197,19 @@ Exclusions always win over includes and drives, nested roots are deduplicated
 
 ### How it stays fast
 
-The first search after the scope changes starts a background **folder index**
-(`%LOCALAPPDATA%\Pirsa\folders.index`). While it builds, the launcher shows
-progress in the settings window and searches with a bounded live walk; once the
-index is ready, queries are answered from memory. The index is cached per scope
-fingerprint, capped at 1.5 million folders, and rebuilt on demand with the
-**Rebuild** button.
+The durable index is a Turso database at
+`%LOCALAPPDATA%\Pirsa\index.db`. On first run, or after the scope changes and
+Pirsa restarts, the walker scans the roots on a dedicated background thread in
+batched transactions. The FTS index uses Turso's ngram tokenizer, and its
+segments are optimized after the initial load. While a scan is running, the
+launcher still reads the last committed rows; searches never wait for the scan.
 
-The live fallback walk is bounded at 20,000 entries and 250 ms, so a query never
-blocks the window. Typing pauses are debounced, and a newer query always wins
-over an older result. An empty query searches no folders at all.
+A filesystem watcher keeps the index current while Pirsa runs. An empty query
+searches nothing. Typing pauses are debounced, and a newer query always wins
+over an older result.
 
-The index is a snapshot: folders created after a build appear in the live
-fallback only until the index is rebuilt.
+The index is a snapshot plus live watcher updates; a full reconciliation happens
+after a scope change or when the persisted index is older than six hours.
 
 ## Calculator and unit conversion
 
@@ -232,7 +233,7 @@ Open the settings window with **Ctrl+,**, the **Settings** button in the footer,
 or the tray menu. The window is borderless like the launcher: drag it by its
 header and close it with the **×** beside the title or the **Close** button. It
 has two columns — the categories **Appearance**, **Behavior**,
-**Folder search**, and **Preview** on the left, and the settings of the selected
+**File search**, and **Preview** on the left, and the settings of the selected
 category on the right — and you can change:
 
 - **UI font** — the supported families installed on this machine: Segoe UI,
@@ -253,8 +254,8 @@ category on the right — and you can change:
   Alt+Shift+Space, Ctrl+Shift+Space, Alt+`, Ctrl+`, Alt+Q, Ctrl+Alt+Q, or
   Ctrl+Alt+P. The new hotkey is registered immediately. If Windows rejects it
   because another app already owns it, the previous hotkey stays active.
-- **Folder search** — trigger, scope, drives, extra folders, exclusions, depth,
-  and hidden-folder handling, plus the folder index state and a **Rebuild**
+- **File search** — trigger, scope, drives, extra folders, exclusions, depth,
+  and hidden-entry handling, plus the Turso index state and a **Rebuild**
   button.
   These persist in `%LOCALAPPDATA%\Pirsa\search.txt`.
 
@@ -299,29 +300,34 @@ crates/
   core/                platform-independent logic (no iced or Windows deps)
     src/
       lib.rs           public models and module re-exports
-      model.rs         AppEntry, LaunchTarget, ScanResult, Icon, HotkeyStatus
+      model.rs         AppEntry, FileEntry, LaunchTarget, ScanResult, Icon, HotkeyStatus
       calc.rs          safe expression parser and length-unit conversion
-      folders.rs       folder trigger splitting, matching, and ranking
-      results.rs       result row model and score merger
+      folders.rs       file-search trigger parsing and path labels
+      results.rs       result row model
       search_scope.rs  drives/includes/excludes/depth, `search.txt` persistence
       search.rs        fuzzy ranking with unit tests
       settings.rs      font/theme/hotkey choices and persistent settings
       usage.rs         persistent launch history
       util.rs          normalization, SearchText, noise filter, logging
+  index/               Turso file index (background scan and live search)
+    src/
+      db.rs            schema/migrations, FTS queries, usage, ranking
+      indexer.rs       recursive walker, batched writes, filesystem watcher
+      rank.rs          match-quality tiers and capped frecency
+      service.rs       worker thread, runtime, and the UI's async handle
   platform/            Windows-specific integration (no iced)
     src/
       lib.rs           startup, shared request flags, platform re-exports
       com.rs           RAII STA COM apartment guard
       drives.rs        drive enumeration (letters, kinds, labels, free space)
-      folder_index.rs  persistent folder index, cache, background builder
-      folder_picker.rs native folder picker for the search scope
+      folder_picker.rs native folder picker for the file-search scope
       hotkey.rs        global hotkey via RegisterHotKey, changeable at runtime
       local_fonts.rs   loads custom fonts from ~/.local/share/fonts
       instance.rs      named mutex + named show/quit events
       shell.rs         dedicated shell workers for scans and icons
       tray.rs          notification-area icon and menu
       apps.rs          Start Menu scanning, ShellExecute
-      folders.rs       bounded multi-root walk, ShellExecute open
+      folders.rs       ShellExecute open for files and folders
       icons.rs         real app icon extraction via IShellItemImageFactory
       window.rs        show/hide, focus, monitor enumeration
       window_memory.rs per-monitor placement memory (`window.txt`)

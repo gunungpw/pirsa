@@ -13,7 +13,6 @@ use tokio::sync::Notify;
 mod apps;
 mod com;
 pub mod drives;
-mod folder_index;
 mod folder_picker;
 mod folders;
 mod hotkey;
@@ -24,30 +23,13 @@ mod shell;
 mod tray;
 mod window_memory;
 
-use pirsa_core::FolderEntry;
-use pirsa_core::search_scope::SearchScope;
-
 pub use apps::launch;
-pub use folder_index::{
-    ensure as ensure_folder_index, invalidate as invalidate_folder_index,
-    rebuild as rebuild_folder_index, status as folder_index_status,
-};
 pub use folder_picker::pick_async as pick_folder;
-pub use folders::{open_folder, search_async as live_folder_search};
+pub use folders::open_path;
 pub use hotkey::status as hotkey_status;
 pub use local_fonts::{LocalFonts, local_fonts};
 pub use shell::{extract_icons, scan};
 pub use window::show_fatal_error;
-
-/// Searches folders in `scope`, preferring the persistent index and falling
-/// back to the bounded live walk while it is not ready.
-pub async fn search_folders(scope: SearchScope, term: String) -> Vec<FolderEntry> {
-    if let Some(found) = folder_index::search(&term, scope.max_results) {
-        return found;
-    }
-
-    live_folder_search(scope, term).await
-}
 
 static TOGGLE_REQUESTED: AtomicBool = AtomicBool::new(false);
 static SHOW_REQUESTED: AtomicBool = AtomicBool::new(false);

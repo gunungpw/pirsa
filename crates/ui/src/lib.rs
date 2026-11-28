@@ -12,10 +12,9 @@ use iced::widget::image::Handle;
 use iced::{Color, Font, Theme};
 
 use pirsa_core::calc::CalcResult;
-use pirsa_core::folders::FolderEntry;
 use pirsa_core::search_scope::{DriveDetails, DriveMode, IndexStatus, SearchScope};
 use pirsa_core::settings::{FontChoice, HotkeyChoice, Settings, ThemeChoice};
-use pirsa_core::{AppEntry, HotkeyStatus, ResultRow};
+use pirsa_core::{AppEntry, FileEntry, HotkeyStatus, ResultRow};
 
 /// UI-originated actions.
 #[derive(Debug, Clone)]
@@ -25,8 +24,8 @@ pub enum Message {
     Navigate(i32),
     /// Launch the app with this stable search key.
     Activate(String),
-    /// Open the folder at this path.
-    ActivateFolder(PathBuf),
+    /// Open the file or folder at this path.
+    ActivateFile(PathBuf),
     CopyCalc,
     OpenSettings,
     Quit,
@@ -68,7 +67,7 @@ pub enum SettingsCategory {
     #[default]
     Appearance,
     Behavior,
-    FolderSearch,
+    FileSearch,
     Preview,
 }
 
@@ -76,7 +75,7 @@ impl SettingsCategory {
     pub const ALL: &'static [Self] = &[
         Self::Appearance,
         Self::Behavior,
-        Self::FolderSearch,
+        Self::FileSearch,
         Self::Preview,
     ];
 
@@ -85,7 +84,7 @@ impl SettingsCategory {
         match self {
             Self::Appearance => "Appearance",
             Self::Behavior => "Behavior",
-            Self::FolderSearch => "Folder search",
+            Self::FileSearch => "File search",
             Self::Preview => "Preview",
         }
     }
@@ -137,15 +136,15 @@ impl std::fmt::Display for ScopePreset {
 #[derive(Debug, Clone, Copy)]
 pub struct ViewState<'a> {
     pub apps: &'a [AppEntry],
-    /// Rows for the active query: apps in app mode, folders in folder mode.
-    /// The view shows the first [`ViewState::result_limit`] rows.
+    /// Rows for the active query: apps in app mode, files and folders in file
+    /// mode. The view shows the first [`ViewState::result_limit`] rows.
     pub rows: &'a [ResultRow],
     pub calc: Option<&'a CalcResult>,
     /// Real icons keyed by [`AppEntry::search_key`].
     pub icons: &'a HashMap<String, Handle>,
-    /// Folder matches, indexed by [`ResultRow::Folder`].
-    pub folders: &'a [FolderEntry],
-    /// Folder search configuration shown in the settings window.
+    /// File and folder matches, indexed by [`ResultRow::File`].
+    pub files: &'a [FileEntry],
+    /// File search configuration shown in the settings window.
     pub scope: &'a SearchScope,
     pub drives: &'a [DriveDetails],
     pub exclude_draft: &'a str,

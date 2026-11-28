@@ -100,12 +100,12 @@ fn format_bytes(bytes: u64) -> String {
     }
 }
 
-/// Build state of the persistent folder index.
+/// Build state of the persistent file index.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct IndexStatus {
     pub ready: bool,
     pub building: bool,
-    pub folders: u64,
+    pub entries: u64,
 }
 
 /// Which drives participate in the search.
@@ -168,10 +168,10 @@ impl DriveMode {
     }
 }
 
-/// A configured folder search.
+/// A configured file-search scope.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchScope {
-    /// Prefix that makes a query search folders instead of apps.
+    /// Prefix that makes a query search files and folders instead of apps.
     pub trigger: String,
     pub drives: DriveMode,
     /// Extra roots searched in addition to the drive selection.
@@ -187,7 +187,7 @@ impl Default for SearchScope {
     fn default() -> Self {
         Self {
             trigger: DEFAULT_TRIGGER.to_owned(),
-            drives: DriveMode::Profile,
+            drives: DriveMode::Fixed,
             include: Vec::new(),
             exclude: default_excludes(),
             depth: DEFAULT_DEPTH,
@@ -644,13 +644,16 @@ mod tests {
     }
 
     #[test]
-    fn defaults_match_the_original_behaviour() {
+    fn defaults_cover_fixed_drives() {
         let scope = SearchScope::default();
 
         assert_eq!(scope.trigger, DEFAULT_TRIGGER);
-        assert_eq!(scope.drives, DriveMode::Profile);
+        assert_eq!(scope.drives, DriveMode::Fixed);
         assert_eq!(scope.depth, DEFAULT_DEPTH);
-        assert_eq!(scope.roots(&profile(), &[]), vec![profile()]);
+        assert_eq!(
+            scope.roots(&profile(), &drives()),
+            vec![PathBuf::from("C:\\"), PathBuf::from("D:\\")]
+        );
         assert!(scope.is_excluded(Path::new("C:\\Users\\me\\node_modules")));
         assert!(!scope.is_excluded(Path::new("C:\\Users\\me\\my.git")));
     }
@@ -660,7 +663,11 @@ mod tests {
         let profile = profile();
 
         assert_eq!(
-            SearchScope::default().roots(&profile, &drives()),
+            SearchScope {
+                drives: DriveMode::Profile,
+                ..SearchScope::default()
+            }
+            .roots(&profile, &drives()),
             vec![profile.clone()]
         );
 
@@ -698,6 +705,7 @@ mod tests {
     #[test]
     fn includes_are_added_after_drive_roots() {
         let scope = SearchScope {
+            drives: DriveMode::Profile,
             include: vec![PathBuf::from("D:\\Work")],
             ..SearchScope::default()
         };
@@ -772,7 +780,7 @@ mod tests {
         );
 
         assert_eq!(scope.trigger, DEFAULT_TRIGGER);
-        assert_eq!(scope.drives, DriveMode::Profile);
+        assert_eq!(scope.drives, DriveMode::Fixed);
         assert_eq!(scope.depth, DEFAULT_DEPTH);
         assert_eq!(scope.max_results, MAX_RESULTS);
         assert!(scope.include.is_empty());
@@ -825,7 +833,7 @@ mod tests {
         excluded.add_exclude("scratch");
 
         let mut driven = base.clone();
-        driven.drives = DriveMode::Fixed;
+        driven.drives = DriveMode::Profile;
 
         assert_ne!(base.fingerprint(), deeper.fingerprint());
         assert_ne!(base.fingerprint(), excluded.fingerprint());

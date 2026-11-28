@@ -10,8 +10,8 @@ use iced::widget::{Image, Space, button, column, container, mouse_area, row, tex
 use iced::{Alignment, Color, Element, Font, Length};
 
 use pirsa_core::calc::{CalcKind, CalcResult};
-use pirsa_core::folders::{self, FolderEntry};
-use pirsa_core::{AppEntry, LaunchTarget, ResultRow};
+use pirsa_core::folders;
+use pirsa_core::{AppEntry, FileEntry, LaunchTarget, ResultRow};
 
 use super::style::*;
 use super::*;
@@ -49,9 +49,9 @@ pub fn view(app: ViewState<'_>) -> Element<'_, Message> {
 }
 
 fn search_row(app: ViewState<'_>, colors: Colors, font: Font) -> Element<'_, Message> {
-    let folder_mode = folders::folder_term(app.query, &app.scope.trigger).is_some();
-    let placeholder = if folder_mode {
-        "Search folders…".to_owned()
+    let file_mode = folders::folder_term(app.query, &app.scope.trigger).is_some();
+    let placeholder = if file_mode {
+        "Search files and folders…".to_owned()
     } else {
         "Type to Search".to_owned()
     };
@@ -153,12 +153,12 @@ fn calc_card<'a>(
 
 fn section_label(app: ViewState<'_>, colors: Colors, font: Font) -> Element<'_, Message> {
     let folder_term = folders::folder_term(app.query, &app.scope.trigger);
-    let folder_mode = folder_term.is_some();
+    let file_mode = folder_term.is_some();
     let query_empty = app.query.trim().is_empty();
-    let indexing = app.indexing && app.apps.is_empty() && !folder_mode;
+    let indexing = app.indexing && app.apps.is_empty() && !file_mode;
 
-    let title = if folder_mode {
-        "Folders"
+    let title = if file_mode {
+        "Files"
     } else if indexing {
         "Indexing"
     } else if query_empty {
@@ -167,7 +167,7 @@ fn section_label(app: ViewState<'_>, colors: Colors, font: Font) -> Element<'_, 
         "Results"
     };
 
-    let count = if folder_mode {
+    let count = if file_mode {
         match folder_term {
             Some("") => "TYPE TO SEARCH".to_owned(),
             _ => format!("{} FOUND", app.rows.len()),
@@ -228,10 +228,10 @@ fn result_list(app: ViewState<'_>, colors: Colors, font: Font) -> Element<'_, Me
             .enumerate()
             .filter_map(|(position, row)| match *row {
                 ResultRow::App(index) => Some(result_row(app, index, position, colors, font)),
-                ResultRow::Folder(index) => app
-                    .folders
+                ResultRow::File(index) => app
+                    .files
                     .get(index)
-                    .map(|folder| folder_row(app, folder, position, colors, font)),
+                    .map(|file| file_row(app, file, position, colors, font)),
             })
             .collect();
 
@@ -245,24 +245,29 @@ fn result_list(app: ViewState<'_>, colors: Colors, font: Font) -> Element<'_, Me
         .into()
 }
 
-fn folder_row<'a>(
+fn file_row<'a>(
     app: ViewState<'a>,
-    folder: &'a FolderEntry,
+    file: &'a FileEntry,
     position: usize,
     colors: Colors,
     font: Font,
 ) -> Element<'a, Message> {
     let selected = position == app.selected;
+    let parent = folders::parent_label(file.path());
 
     let content = row![
-        folder_icon(colors),
+        if file.is_dir() {
+            folder_icon(colors)
+        } else {
+            icon_tile(file.name(), colors, font)
+        },
         row![
-            text(folder.name())
+            text(file.name())
                 .size(15)
                 .font(semibold_font(app.app_name_font))
                 .color(colors.text)
                 .wrapping(Wrapping::None),
-            text(folder.parent_label())
+            text(parent)
                 .size(11)
                 .font(app.category_font)
                 .color(colors.dim)
@@ -271,11 +276,12 @@ fn folder_row<'a>(
         .spacing(9)
         .align_y(Alignment::End)
         .width(Length::Fill),
-        container(text("Folder").size(11).font(font).color(if selected {
-            colors.muted
-        } else {
-            colors.dim
-        }))
+        container(
+            text(if file.is_dir() { "Folder" } else { "File" })
+                .size(11)
+                .font(font)
+                .color(if selected { colors.muted } else { colors.dim })
+        )
         .width(72)
         .align_x(Alignment::End),
     ]
@@ -285,7 +291,7 @@ fn folder_row<'a>(
     .spacing(12);
 
     button(content)
-        .on_press(Message::ActivateFolder(folder.path().to_path_buf()))
+        .on_press(Message::ActivateFile(file.path().to_path_buf()))
         .width(Length::Fill)
         .height(ROW_HEIGHT)
         .padding([0, 12])
@@ -354,13 +360,13 @@ fn empty_state(app: ViewState<'_>, colors: Colors, font: Font) -> Element<'_, Me
     let (title, subtitle) = if let Some(term) = folder_term {
         if term.is_empty() {
             (
-                format!("Type a folder name after “{}”", app.scope.trigger),
-                "Folder search is separate from app search.".to_owned(),
+                format!("Type a file or folder name after “{}”", app.scope.trigger),
+                "File search is separate from app search.".to_owned(),
             )
         } else {
             (
-                format!("No folders for “{term}”"),
-                "Try a different folder name, or press Esc to close.".to_owned(),
+                format!("No files or folders for “{term}”"),
+                "Try a different name, or press Esc to close.".to_owned(),
             )
         }
     } else if app.indexing {

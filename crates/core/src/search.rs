@@ -20,10 +20,8 @@ pub fn rank_with_usage(apps: &[AppEntry], query: &str, usage: &Usage) -> Vec<usi
 
 /// Application matches with their scores, best first.
 ///
-/// The scores use the same tiers as [`crate::folders::rank_scores`] — exact
-/// 2000, prefix 1500, substring 1050, then the weaker acronym and subsequence
-/// matches — so [`crate::results::merge`] can interleave apps and folders into
-/// one list.
+/// Exact matches count 2000, prefixes 1500, substrings 1050, then the weaker
+/// acronym and subsequence matches follow.
 pub fn rank_scores(apps: &[AppEntry], query: &str, usage: &Usage) -> Vec<(i32, usize)> {
     let query = SearchText::new(query);
 

@@ -10,7 +10,9 @@ fn launcher_with_results(count: usize) -> Launcher {
         calc: None,
         usage: Usage::default(),
         icons: HashMap::new(),
-        folders: Vec::new(),
+        files: Vec::new(),
+        file_index: None,
+        index_fingerprint: SearchScope::default().fingerprint(),
         scope: SearchScope::default(),
         drives: Vec::new(),
         trigger_draft: SearchScope::default().trigger.clone(),
@@ -33,7 +35,7 @@ fn launcher_with_results(count: usize) -> Launcher {
         warning: None,
         indexing: false,
         rescan_queued: false,
-        folder_generation: 0,
+        file_generation: 0,
         scan_generation: 0,
         icon_generation: 0,
     }
@@ -172,16 +174,6 @@ fn calculation_card_is_the_first_selection() {
     assert_eq!(launcher.selected, 0);
 }
 
-fn folder_entry(path: &str) -> FolderEntry {
-    let path = PathBuf::from(path);
-    let name = path
-        .file_name()
-        .map(|name| name.to_string_lossy().into_owned())
-        .unwrap_or_default();
-
-    FolderEntry::new(path, name)
-}
-
 #[test]
 fn plain_queries_search_apps_only() {
     let mut launcher = launcher_with_results(0);
@@ -191,132 +183,106 @@ fn plain_queries_search_apps_only() {
         LaunchTarget::Shell("test:reports".to_owned()),
     ));
     launcher
-        .folders
-        .push(folder_entry("C:\\Users\\me\\reports"));
+        .files
+        .push(file_entry("C:\\Users\\me\\reports", false));
 
     let _ = launcher.change_query("reports".to_owned());
 
     assert_eq!(launcher.rows, vec![ResultRow::App(0)]);
     assert!(
-        launcher.folders.is_empty(),
-        "folder search is off without the trigger"
+        launcher.files.is_empty(),
+        "file search is off without the trigger"
     );
 }
 
+fn file_entry(path: &str, is_dir: bool) -> FileEntry {
+    let path = PathBuf::from(path);
+    let name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let key = path.to_string_lossy().to_lowercase();
+
+    FileEntry::new(path, name, is_dir, 0, 0, format!("path:{key}"))
+}
+
 #[test]
-fn the_trigger_searches_folders_only() {
+fn trigger_results_render_files_and_folders() {
     let mut launcher = launcher_with_results(0);
-    launcher.apps.push(AppEntry::new(
-        "Reports".to_owned(),
-        "Start Menu".to_owned(),
-        LaunchTarget::Shell("test:reports".to_owned()),
-    ));
-    launcher.folders = vec![
-        folder_entry("C:\\Users\\me\\old-reports"),
-        folder_entry("C:\\Users\\me\\notes"),
-        folder_entry("C:\\Users\\me\\reports"),
-    ];
 
     let _ = launcher.change_query(":reports".to_owned());
+    launcher.apply_file_hits(vec![
+        file_entry("C:\\Users\\me\\reports", true),
+        file_entry("C:\\Users\\me\\annual-reports.pdf", false),
+        file_entry("C:\\Users\\me\\report-2025.xlsx", false),
+    ]);
 
-    // "reports" (prefix match) outranks "old-reports" (substring) and
-    // "notes" does not match at all. Apps never appear in folder mode.
     assert_eq!(
         launcher.rows,
-        vec![ResultRow::Folder(2), ResultRow::Folder(0)]
+        vec![ResultRow::File(0), ResultRow::File(1), ResultRow::File(2)]
     );
-    assert_eq!(launcher.selectable_count(), 2);
+    assert_eq!(launcher.selectable_count(), 3);
 
     let _ = launcher.update(Message::Ui(ui::Message::Navigate(100)));
-    assert_eq!(launcher.selected, 1);
+    assert_eq!(launcher.selected, 2);
 }
 
 #[test]
-fn folder_matches_that_stop_matching_drop_out() {
+fn a_plain_query_clears_file_results() {
     let mut launcher = launcher_with_results(0);
-    launcher
-        .folders
-        .push(folder_entry("C:\\Users\\me\\reports"));
-
     let _ = launcher.change_query(":report".to_owned());
-    assert_eq!(launcher.rows, vec![ResultRow::Folder(0)]);
+    launcher.apply_file_hits(vec![file_entry("C:\\Users\\me\\reports", false)]);
 
-    let _ = launcher.change_query(":note".to_owned());
+    assert_eq!(launcher.rows, vec![ResultRow::File(0)]);
 
-    assert!(launcher.rows.is_empty(), "the stale folder drops out");
-    assert_eq!(
-        launcher.folders.len(),
-        1,
-        "matches are kept until the new search lands"
-    );
+    let _ = launcher.change_query("report".to_owned());
+
+    assert!(launcher.files.is_empty());
+    assert!(launcher.rows.is_empty());
 }
 
 #[test]
-fn an_empty_query_clears_folder_matches() {
+fn stale_file_searches_are_ignored() {
     let mut launcher = launcher_with_results(0);
-    launcher
-        .folders
-        .push(folder_entry("C:\\Users\\me\\reports"));
+    launcher.file_generation = 7;
 
-    let _ = launcher.change_query(":report".to_owned());
-    let _ = launcher.change_query("   ".to_owned());
-
-    assert_eq!(launcher.folders, [] as [FolderEntry; 0]);
-    assert_eq!(launcher.rows, [] as [ResultRow; 0]);
-    assert_eq!(launcher.selectable_count(), 0);
-}
-
-#[test]
-fn stale_folder_searches_are_ignored() {
-    let mut launcher = launcher_with_results(0);
-
-    let _ = launcher.change_query(":report".to_owned());
-    let stale = launcher.folder_generation;
-
-    let _ = launcher.change_query(":report2".to_owned());
-    let _ = launcher.update(Message::FolderSearchComplete {
-        generation: stale,
-        folders: vec![folder_entry("C:\\Users\\me\\reports")],
+    let _ = launcher.update(Message::FileSearchComplete {
+        generation: 6,
+        files: vec![file_entry("C:\\Users\\me\\reports", false)],
     });
 
-    assert_eq!(launcher.folders, [] as [FolderEntry; 0]);
+    assert!(launcher.files.is_empty());
+    assert!(launcher.rows.is_empty());
 }
 
 #[test]
 fn a_custom_trigger_is_used() {
     let mut launcher = launcher_with_results(0);
     launcher.scope.trigger = ">>".to_owned();
-    launcher
-        .folders
-        .push(folder_entry("C:\\Users\\me\\reports"));
 
     let _ = launcher.change_query(">>reports".to_owned());
-    assert_eq!(launcher.rows, vec![ResultRow::Folder(0)]);
+    launcher.apply_file_hits(vec![file_entry("C:\\Users\\me\\reports", true)]);
+    assert_eq!(launcher.rows, vec![ResultRow::File(0)]);
 
     let _ = launcher.change_query(":reports".to_owned());
-    assert!(
-        launcher.rows.is_empty(),
-        ": is an app query once the trigger is >>"
-    );
+    assert!(launcher.rows.is_empty());
 }
 
 #[test]
-fn a_bare_trigger_clears_folder_rows() {
+fn a_bare_trigger_clears_file_rows() {
     let mut launcher = launcher_with_results(0);
-    launcher
-        .folders
-        .push(folder_entry("C:\\Users\\me\\reports"));
 
     let _ = launcher.change_query(":reports".to_owned());
-    assert_eq!(launcher.rows, vec![ResultRow::Folder(0)]);
+    launcher.apply_file_hits(vec![file_entry("C:\\Users\\me\\reports", false)]);
+    assert_eq!(launcher.rows, vec![ResultRow::File(0)]);
 
     let _ = launcher.change_query(":".to_owned());
     assert!(launcher.rows.is_empty());
-    assert!(launcher.folders.is_empty());
+    assert!(launcher.files.is_empty());
 }
 
 #[test]
-fn folder_mode_disables_the_calculator() {
+fn file_mode_disables_the_calculator() {
     let mut launcher = launcher_with_results(0);
 
     let _ = launcher.change_query("1+1".to_owned());
@@ -369,19 +335,45 @@ fn toggling_a_drive_switches_to_selected_drives() {
 }
 
 #[test]
-fn a_scope_change_clears_stale_folder_results() {
+fn a_scope_change_clears_stale_file_results() {
     let mut launcher = launcher_with_results(0);
     launcher
-        .folders
-        .push(folder_entry("C:\\Users\\me\\reports"));
-    launcher.rows.push(ResultRow::Folder(0));
+        .files
+        .push(file_entry("C:\\Users\\me\\reports", false));
+    launcher.rows.push(ResultRow::File(0));
 
     let _ = launcher.update(Message::Settings(ui::SettingsMessage::DepthChanged(9)));
     let _ = launcher.update(Message::Settings(ui::SettingsMessage::ScopeCommitted));
 
-    assert_eq!(launcher.folders, [] as [FolderEntry; 0]);
-    assert!(launcher.rows.is_empty(), "rows index the dropped folders");
+    assert!(launcher.files.is_empty());
+    assert!(launcher.rows.is_empty(), "rows index the dropped files");
     assert_eq!(launcher.scope.depth, 9);
+}
+
+#[test]
+fn a_scope_change_asks_for_a_restart_until_reverted() {
+    let mut launcher = launcher_with_results(0);
+    let original = launcher.scope.depth;
+
+    let _ = launcher.update(Message::Settings(ui::SettingsMessage::DepthChanged(9)));
+    let _ = launcher.update(Message::Settings(ui::SettingsMessage::ScopeCommitted));
+
+    assert!(launcher.scope_dirty());
+    assert!(
+        launcher
+            .settings_notice
+            .as_deref()
+            .is_some_and(|notice| notice.contains("Restart")),
+        "the settings window must say the running index still uses the old scope"
+    );
+
+    let _ = launcher.update(Message::Settings(ui::SettingsMessage::DepthChanged(
+        original as u8,
+    )));
+    let _ = launcher.update(Message::Settings(ui::SettingsMessage::ScopeCommitted));
+
+    assert!(!launcher.scope_dirty());
+    assert!(launcher.settings_notice.is_none());
 }
 
 #[test]

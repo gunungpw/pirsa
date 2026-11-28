@@ -13,22 +13,24 @@ use iced::widget::operation;
 use iced::{Event, Subscription, Task, Theme, window};
 
 use pirsa_core::calc::{self, CalcResult};
-use pirsa_core::folders::{self, FolderEntry};
-use pirsa_core::results;
+use pirsa_core::folders;
 use pirsa_core::results::ResultRow;
 use pirsa_core::search;
-use pirsa_core::search_scope::{DriveDetails, DriveMode, IndexStatus, SearchScope};
+use pirsa_core::search_scope::{DriveDetails, DriveInfo, DriveMode, IndexStatus, SearchScope};
 use pirsa_core::settings::{FontChoice, HotkeyChoice, Settings, ThemeChoice};
 use pirsa_core::usage::Usage;
 use pirsa_core::util;
-use pirsa_core::{AppEntry, HotkeyStatus, Icon, ScanResult};
+use pirsa_core::{AppEntry, FileEntry, HotkeyStatus, Icon, ScanResult};
+use pirsa_index::IndexHandle;
 use pirsa_platform as platform;
 use pirsa_ui as ui;
+
+const SCOPE_RESTART_NOTICE: &str = "Restart Pirsa to apply file-index scope changes.";
 
 /// The application's complete state.
 pub struct Launcher {
     pub(crate) apps: Vec<AppEntry>,
-    /// Rows for the active query: apps or folders, never both.
+    /// Rows for the active query: apps, or files and folders from the index.
     pub(crate) rows: Vec<ResultRow>,
     /// Optional calculator/unit-conversion result for the current query.
     pub(crate) calc: Option<CalcResult>,
@@ -36,10 +38,13 @@ pub struct Launcher {
     pub(crate) usage: Usage,
     /// Real application icons, keyed by display name.
     pub(crate) icons: HashMap<String, Handle>,
-    /// Folder matches, indexed by [`ResultRow::Folder`]; only used in folder
-    /// mode.
-    pub(crate) folders: Vec<FolderEntry>,
-    /// Folder trigger, roots, exclusions, and index settings.
+    /// File and folder entries from the index, indexed by [`ResultRow::File`].
+    pub(crate) files: Vec<FileEntry>,
+    /// Durable Turso file index, if it started.
+    pub(crate) file_index: Option<IndexHandle>,
+    /// Scope fingerprint the running index was built with.
+    pub(crate) index_fingerprint: u64,
+    /// File-search trigger, roots, exclusions, and index settings.
     pub(crate) scope: SearchScope,
     pub(crate) drives: Vec<DriveDetails>,
     pub(crate) trigger_draft: String,
@@ -66,8 +71,8 @@ pub struct Launcher {
     pub(crate) indexing: bool,
     /// Set when F5 arrives while a scan is running; runs once the scan lands.
     pub(crate) rescan_queued: bool,
-    /// Monotonic token for the newest folder search; older results are discarded.
-    pub(crate) folder_generation: u64,
+    /// Monotonic token for the newest file-index search; older results are discarded.
+    pub(crate) file_generation: u64,
     /// Monotonic token for the newest scan; older results are discarded.
     pub(crate) scan_generation: u64,
     /// Monotonic token for the newest icon batch; older results are discarded.
@@ -95,14 +100,14 @@ pub enum Message {
         choice: HotkeyChoice,
         status: HotkeyStatus,
     },
-    /// Result of a folder search for the current query.
-    FolderSearchComplete {
+    /// Result of a Turso file-index search for the current query.
+    FileSearchComplete {
         generation: u64,
-        folders: Vec<FolderEntry>,
+        files: Vec<FileEntry>,
     },
     /// Result of the native folder picker.
     FolderPicked(Option<PathBuf>),
-    /// Periodic refresh while the folder index is building.
+    /// Periodic refresh while the file index is building.
     IndexTick,
     Event(window::Id, Event),
 }
@@ -113,15 +118,27 @@ impl Launcher {
         let scope = SearchScope::load();
         let trigger_draft = scope.trigger.clone();
         let drives = platform::drives::list();
-        platform::ensure_folder_index(&scope);
-        let index_status = platform::folder_index_status();
+        let profile =
+            std::env::var_os("USERPROFILE").map_or_else(|| PathBuf::from("."), PathBuf::from);
+        let drive_infos: Vec<DriveInfo> = drives.iter().map(|drive| drive.info.clone()).collect();
+        let index_config = pirsa_index::IndexConfig::from_scope(&scope, &profile, &drive_infos);
+        let index_fingerprint = index_config.fingerprint;
+        // Keep the index out of the install directory at all costs: without
+        // LOCALAPPDATA there is no durable per-user location to write to.
+        let file_index = util::data_directory()
+            .map(|directory| pirsa_index::start(directory.join("index.db"), index_config));
+        let index_status = file_index
+            .as_ref()
+            .map_or_else(IndexStatus::default, IndexHandle::status);
         let mut launcher = Self {
             apps: Vec::new(),
             rows: Vec::new(),
             calc: None,
             usage: Usage::load(),
             icons: HashMap::new(),
-            folders: Vec::new(),
+            files: Vec::new(),
+            file_index,
+            index_fingerprint,
             scope,
             drives,
             trigger_draft,
@@ -144,7 +161,7 @@ impl Launcher {
             warning: None,
             indexing: true,
             rescan_queued: false,
-            folder_generation: 0,
+            file_generation: 0,
             scan_generation: 0,
             icon_generation: 0,
         };
@@ -207,17 +224,12 @@ impl Launcher {
 
                 Task::none()
             }
-            Message::FolderSearchComplete {
-                generation,
-                folders,
-            } => {
-                if generation != self.folder_generation {
+            Message::FileSearchComplete { generation, files } => {
+                if generation != self.file_generation {
                     return Task::none();
                 }
 
-                self.folders = folders;
-                self.recompute();
-
+                self.apply_file_hits(files);
                 Task::none()
             }
             Message::FolderPicked(picked) => match picked {
@@ -228,7 +240,10 @@ impl Launcher {
                 None => Task::none(),
             },
             Message::IndexTick => {
-                self.index_status = platform::folder_index_status();
+                self.index_status = self
+                    .file_index
+                    .as_ref()
+                    .map_or_else(IndexStatus::default, IndexHandle::status);
                 self.start_index_tick()
             }
             Message::WindowReady(id, hwnd) => {
@@ -274,7 +289,7 @@ impl Launcher {
                 Task::none()
             }
             ui::Message::Activate(key) => self.activate(&key),
-            ui::Message::ActivateFolder(path) => self.open_folder_path(&path),
+            ui::Message::ActivateFile(path) => self.open_file_path(&path),
             ui::Message::CopyCalc => self.copy_calc(),
             ui::Message::OpenSettings => self.open_settings(),
             ui::Message::Quit => iced::exit(),
@@ -288,26 +303,21 @@ impl Launcher {
         self.query = query;
         self.error = None;
 
-        let folder_term = folders::folder_term(&self.query, &self.scope.trigger).map(str::to_owned);
+        let term = folders::folder_term(&self.query, &self.scope.trigger).map(str::to_owned);
 
-        if let Some(term) = folder_term {
+        if let Some(term) = term {
             self.calc = None;
+            self.cancel_file_search();
+            self.selected = 0;
 
             if term.is_empty() {
-                self.cancel_folder_search();
-                self.recompute();
-                self.selected = 0;
                 return Task::none();
             }
 
-            // Re-rank the matches still on hand immediately; the debounced
-            // filesystem search replaces them with the full result.
-            self.recompute();
-            self.selected = 0;
-            self.begin_folder_search(term)
+            self.search_files(term)
         } else {
             self.calc = calc::evaluate(&self.query);
-            self.cancel_folder_search();
+            self.cancel_file_search();
             self.recompute();
             self.selected = 0;
             Task::none()
@@ -317,36 +327,33 @@ impl Launcher {
     fn clear_query(&mut self) -> Task<Message> {
         self.query.clear();
         self.calc = None;
-        self.cancel_folder_search();
+        self.cancel_file_search();
         self.error = None;
         self.recompute();
         self.selected = 0;
         Task::none()
     }
 
-    /// Drops folder matches and invalidates any in-flight folder search.
-    fn cancel_folder_search(&mut self) {
-        self.folders.clear();
-        self.folder_generation = self.folder_generation.wrapping_add(1);
+    /// Drops file/folder rows and invalidates any in-flight index search.
+    fn cancel_file_search(&mut self) {
+        self.files.clear();
+        self.rows.clear();
+        self.file_generation = self.file_generation.wrapping_add(1);
     }
 
-    /// Starts a debounced filesystem walk; stale results are dropped.
-    fn begin_folder_search(&mut self, term: String) -> Task<Message> {
-        self.folder_generation = self.folder_generation.wrapping_add(1);
-        let generation = self.folder_generation;
-        let scope = self.scope.clone();
+    fn search_files(&mut self, term: String) -> Task<Message> {
+        let Some(index) = self.file_index.clone() else {
+            return Task::none();
+        };
+        let generation = self.file_generation;
 
         Task::perform(
             async move {
-                // A burst of keystrokes should walk the profile once, not once
-                // per character.
-                tokio::time::sleep(Duration::from_millis(140)).await;
-                platform::search_folders(scope, term).await
+                // Short debounce; Turso answers from the FTS/B-tree index.
+                tokio::time::sleep(Duration::from_millis(40)).await;
+                index.search(term, 200).await
             },
-            move |folders| Message::FolderSearchComplete {
-                generation,
-                folders,
-            },
+            move |files| Message::FileSearchComplete { generation, files },
         )
     }
 
@@ -361,51 +368,55 @@ impl Launcher {
         })
     }
 
-    /// Rebuilds the folder index from scratch.
+    /// Rebuilds the current file index from scratch.
     fn rebuild_index(&mut self) -> Task<Message> {
-        if !cfg!(test) {
-            platform::rebuild_folder_index(&self.scope);
+        self.cancel_file_search();
+
+        if self.scope_dirty() {
+            self.settings_notice = Some(SCOPE_RESTART_NOTICE.to_owned());
+            return Task::none();
         }
 
-        self.index_status = platform::folder_index_status();
+        if let Some(index) = &self.file_index {
+            index.rebuild();
+        }
+
+        self.index_status = self
+            .file_index
+            .as_ref()
+            .map_or_else(IndexStatus::default, IndexHandle::status);
         self.start_index_tick()
     }
 
-    /// Persists a scope edit and makes sure the index matches it.
+    /// Whether the saved scope differs from the running index's scope.
+    fn scope_dirty(&self) -> bool {
+        self.scope.fingerprint() != self.index_fingerprint
+    }
+
+    /// Persists a scope edit. The running index keeps its old scope until the
+    /// next start, so say so instead of pretending the change is live.
     fn scope_changed(&mut self) -> Task<Message> {
         self.scope.save();
-
-        if !cfg!(test) {
-            platform::ensure_folder_index(&self.scope);
-        }
-
-        self.index_status = platform::folder_index_status();
-        self.cancel_folder_search();
-        // Rows index into the folder matches just dropped.
-        self.recompute();
-
-        let term = folders::folder_term(&self.query, &self.scope.trigger)
-            .filter(|term| !term.is_empty())
-            .map(str::to_owned);
-        let tick = self.start_index_tick();
-
-        match term {
-            Some(term) => Task::batch([tick, self.begin_folder_search(term)]),
-            None => tick,
-        }
+        self.drives = platform::drives::list();
+        self.cancel_file_search();
+        self.settings_notice = self.scope_dirty().then(|| SCOPE_RESTART_NOTICE.to_owned());
+        self.index_status = self
+            .file_index
+            .as_ref()
+            .map_or_else(IndexStatus::default, IndexHandle::status);
+        self.start_index_tick()
     }
 
     /// Applies a trigger edit, dropping results that belonged to the old mode.
     fn apply_trigger_change(&mut self) -> Task<Message> {
-        self.cancel_folder_search();
-        self.recompute();
+        self.cancel_file_search();
         self.selected = 0;
 
         let term = folders::folder_term(&self.query, &self.scope.trigger)
             .filter(|term| !term.is_empty())
             .map(str::to_owned);
 
-        term.map_or_else(Task::none, |term| self.begin_folder_search(term))
+        term.map_or_else(Task::none, |term| self.search_files(term))
     }
 
     /// Drive letters currently selected, defaulting to the attached drives.
@@ -544,7 +555,7 @@ impl Launcher {
                     self.apply_trigger_change()
                 } else {
                     self.settings_notice = Some(
-                        "The folder trigger must be 1–8 characters without spaces or “=”."
+                        "The file-search trigger must be 1–8 characters without spaces or “=”."
                             .to_owned(),
                     );
                     Task::none()
@@ -586,7 +597,7 @@ impl Launcher {
             // failed open never leaves a dead id behind.
             let (_, open) = window::open(settings_window_settings());
             self.trigger_draft = self.scope.trigger.clone();
-            self.settings_notice = None;
+            self.settings_notice = self.scope_dirty().then(|| SCOPE_RESTART_NOTICE.to_owned());
             util::log("opening settings window");
             open.map(Message::SettingsOpened)
         };
@@ -749,7 +760,7 @@ impl Launcher {
         )
     }
 
-    /// Launches whatever row sits at `position`, app or folder.
+    /// Launches whatever row sits at `position`: an app, file, or folder.
     fn activate_row(&mut self, position: usize) -> Task<Message> {
         match self.rows.get(position) {
             Some(ResultRow::App(index)) => {
@@ -760,13 +771,13 @@ impl Launcher {
                 let key = app.search_key().to_owned();
                 self.activate(&key)
             }
-            Some(ResultRow::Folder(index)) => {
-                let Some(folder) = self.folders.get(*index) else {
+            Some(ResultRow::File(index)) => {
+                let Some(file) = self.files.get(*index) else {
                     return Task::none();
                 };
 
-                let path = folder.path().to_path_buf();
-                self.open_folder_path(&path)
+                let path = file.path().to_path_buf();
+                self.open_file_path(&path)
             }
             None => Task::none(),
         }
@@ -777,8 +788,18 @@ impl Launcher {
         self.activate_row(number.saturating_sub(1))
     }
 
-    fn open_folder_path(&mut self, path: &std::path::Path) -> Task<Message> {
-        if let Err(error) = platform::open_folder(path) {
+    fn open_file_path(&mut self, path: &std::path::Path) -> Task<Message> {
+        if let Some(file) = self.files.iter().find(|file| file.path() == path)
+            && let Some(index) = &self.file_index
+        {
+            index.record_launch(file.usage_key().to_owned());
+        }
+
+        self.open_path(path)
+    }
+
+    fn open_path(&mut self, path: &std::path::Path) -> Task<Message> {
+        if let Err(error) = platform::open_path(path) {
             let name = path.file_name().map_or_else(
                 || path.display().to_string(),
                 |name| name.to_string_lossy().into_owned(),
@@ -878,7 +899,7 @@ impl Launcher {
     fn reset_search(&mut self) {
         self.query.clear();
         self.calc = None;
-        self.cancel_folder_search();
+        self.cancel_file_search();
         self.error = None;
         self.recompute();
         self.selected = 0;
@@ -908,22 +929,37 @@ impl Launcher {
     }
 
     fn recompute(&mut self) {
-        let folder_term = folders::folder_term(&self.query, &self.scope.trigger);
-        let apps = if folder_term.is_some() {
-            Vec::new()
-        } else {
-            search::rank_scores(&self.apps, &self.query, &self.usage)
-        };
-        let folders =
-            folder_term.map_or_else(Vec::new, |term| folders::rank_scores(&self.folders, term));
+        if folders::folder_term(&self.query, &self.scope.trigger).is_some() {
+            // File-mode rows come directly from the Turso index.
+            return;
+        }
 
-        self.rows = results::merge(&apps, &folders, usize::MAX);
+        let apps = search::rank_scores(&self.apps, &self.query, &self.usage);
+        self.rows = apps
+            .into_iter()
+            .map(|(_, index)| ResultRow::App(index))
+            .collect();
 
         let selectable = self.selectable_count();
 
         if self.selected >= selectable {
             self.selected = selectable.saturating_sub(1);
         }
+    }
+
+    /// Builds file and folder rows from the Turso index, preserving its
+    /// ranking. Both kinds share one list so a folder launch records usage just
+    /// like a file launch.
+    fn apply_file_hits(&mut self, hits: Vec<FileEntry>) {
+        self.files.clear();
+        self.rows.clear();
+
+        for (index, hit) in hits.into_iter().enumerate() {
+            self.files.push(hit);
+            self.rows.push(ResultRow::File(index));
+        }
+
+        self.selected = 0;
     }
 
     /// Number of rows that fit on screen.

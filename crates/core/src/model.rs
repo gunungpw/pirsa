@@ -75,6 +75,69 @@ impl AppEntry {
     }
 }
 
+/// A file or folder returned by the durable file index.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileEntry {
+    path: PathBuf,
+    name: String,
+    is_dir: bool,
+    size: u64,
+    modified: u64,
+    usage_key: String,
+}
+
+impl FileEntry {
+    #[must_use]
+    pub fn new(
+        path: PathBuf,
+        name: String,
+        is_dir: bool,
+        size: u64,
+        modified: u64,
+        usage_key: String,
+    ) -> Self {
+        Self {
+            path,
+            name,
+            is_dir,
+            size,
+            modified,
+            usage_key,
+        }
+    }
+
+    #[must_use]
+    pub fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
+    #[must_use]
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    #[must_use]
+    pub fn is_dir(&self) -> bool {
+        self.is_dir
+    }
+
+    #[must_use]
+    pub fn size(&self) -> u64 {
+        self.size
+    }
+
+    #[must_use]
+    pub fn modified(&self) -> u64 {
+        self.modified
+    }
+
+    /// Stable key used by the persistent usage table.
+    #[must_use]
+    pub fn usage_key(&self) -> &str {
+        &self.usage_key
+    }
+}
+
 /// Result of a Start Menu scan.
 #[derive(Debug, Default, Clone)]
 pub struct ScanResult {

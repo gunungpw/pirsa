@@ -30,7 +30,7 @@ fn app_state<'a>(
         rows,
         calc: None,
         icons,
-        folders: &[],
+        files: &[],
         scope: empty_scope(),
         drives: &[],
         exclude_draft: "",
@@ -106,66 +106,108 @@ fn index_warning_is_shown_in_the_footer() {
 }
 
 #[test]
-fn folder_rows_are_clickable_headlessly() {
+fn directory_rows_are_clickable_headlessly() {
     let apps = [];
-    let rows = [ResultRow::Folder(0)];
+    let rows = [ResultRow::File(0)];
     let icons = HashMap::new();
     let theme = Theme::Dark;
-    let folders = [FolderEntry::new(
+    let files = [FileEntry::new(
         PathBuf::from("C:\\Users\\me\\Documents\\reports"),
         "reports".to_owned(),
+        true,
+        0,
+        0,
+        "path:c:\\users\\me\\documents\\reports".to_owned(),
     )];
 
     let mut state = app_state(&apps, &rows, &icons, &theme);
-    state.folders = &folders;
+    state.files = &files;
     state.query = ":report";
 
     let mut ui = iced_tester::test::simulator(view(state));
 
-    assert!(ui.find("Folders").is_ok());
+    assert!(ui.find("Files").is_ok());
     assert!(ui.find("reports").is_ok());
+    assert!(ui.find("Folder").is_ok(), "a directory is labelled Folder");
     ui.click("reports")
-        .expect("a folder row should be clickable");
+        .expect("a directory row should be clickable");
 
     let messages: Vec<Message> = ui.into_messages().collect();
     assert!(
         messages.iter().any(|message| matches!(
             message,
-            Message::ActivateFolder(path) if path.ends_with("reports")
+            Message::ActivateFile(path) if path.ends_with("reports")
         )),
-        "clicking a folder row should emit ActivateFolder for that path"
+        "clicking a directory row should emit ActivateFile for that path"
     );
 }
 
 #[test]
-fn folder_mode_uses_the_folders_label() {
-    let apps = [notepad()];
-    let rows = [ResultRow::Folder(0)];
+fn file_rows_are_clickable_headlessly() {
+    let apps = [];
+    let rows = [ResultRow::File(0)];
     let icons = HashMap::new();
     let theme = Theme::Dark;
-    let folders = [FolderEntry::new(
-        PathBuf::from("C:\\Users\\me\\Documents\\notes"),
-        "notes".to_owned(),
+    let files = [FileEntry::new(
+        PathBuf::from("C:\\Users\\me\\Documents\\annual-report.txt"),
+        "annual-report.txt".to_owned(),
+        false,
+        12,
+        0,
+        "path:c:\\users\\me\\documents\\annual-report.txt".to_owned(),
     )];
 
     let mut state = app_state(&apps, &rows, &icons, &theme);
-    state.folders = &folders;
+    state.files = &files;
+    state.query = ":report";
+
+    let mut ui = iced_tester::test::simulator(view(state));
+
+    assert!(ui.find("Files").is_ok());
+    assert!(ui.find("annual-report.txt").is_ok());
+    ui.click("annual-report.txt")
+        .expect("a file row should be clickable");
+
+    let messages: Vec<Message> = ui.into_messages().collect();
+    assert!(
+        messages.iter().any(|message| matches!(
+            message,
+            Message::ActivateFile(path) if path.ends_with("annual-report.txt")
+        )),
+        "clicking a file row should emit ActivateFile for that path"
+    );
+}
+
+#[test]
+fn file_mode_uses_the_files_label() {
+    let apps = [notepad()];
+    let rows = [ResultRow::File(0)];
+    let icons = HashMap::new();
+    let theme = Theme::Dark;
+    let files = [FileEntry::new(
+        PathBuf::from("C:\\Users\\me\\Documents\\notes"),
+        "notes".to_owned(),
+        true,
+        0,
+        0,
+        "path:c:\\users\\me\\documents\\notes".to_owned(),
+    )];
+
+    let mut state = app_state(&apps, &rows, &icons, &theme);
+    state.files = &files;
     state.query = ":note";
 
     let mut ui = iced_tester::test::simulator(view(state));
 
-    assert!(
-        ui.find("Folders").is_ok(),
-        "folder mode has its own heading"
-    );
+    assert!(ui.find("Files").is_ok(), "file mode has its own heading");
     assert!(ui.find("1 FOUND").is_ok());
-    assert!(ui.find("notes").is_ok(), "the folder row is listed");
+    assert!(ui.find("notes").is_ok(), "the directory row is listed");
     assert!(ui.find("Notepad").is_err(), "app rows are not shown");
     assert!(ui.find("All apps").is_err());
 }
 
 #[test]
-fn a_bare_trigger_shows_the_folder_hint() {
+fn a_bare_trigger_shows_the_file_hint() {
     let apps = [];
     let rows = [];
     let icons = HashMap::new();
@@ -175,7 +217,7 @@ fn a_bare_trigger_shows_the_folder_hint() {
 
     let mut ui = iced_tester::test::simulator(view(state));
 
-    assert!(ui.find("Type a folder name after “:”").is_ok());
+    assert!(ui.find("Type a file or folder name after “:”").is_ok());
 }
 
 fn settings_state<'a>(
@@ -303,14 +345,14 @@ fn settings_category_column_switches_the_detail_column() {
         SettingsCategory::Appearance,
     )));
 
-    ui.click("Folder search")
-        .expect("Folder search should be a category button");
+    ui.click("File search")
+        .expect("File search should be a category button");
 
     let messages: Vec<SettingsMessage> = ui.into_messages().collect();
     assert!(
         messages.iter().any(|message| matches!(
             message,
-            SettingsMessage::CategorySelected(SettingsCategory::FolderSearch)
+            SettingsMessage::CategorySelected(SettingsCategory::FileSearch)
         )),
         "clicking a category should emit CategorySelected for it"
     );
@@ -322,7 +364,7 @@ fn settings_category_column_switches_the_detail_column() {
         IndexStatus::default(),
         &theme,
         None,
-        SettingsCategory::FolderSearch,
+        SettingsCategory::FileSearch,
     )));
 
     assert!(ui.find("Trigger").is_ok());
@@ -362,7 +404,7 @@ fn settings_view_lists_drives_and_index_state() {
     let status = IndexStatus {
         ready: true,
         building: false,
-        folders: 1234,
+        entries: 1234,
     };
 
     let mut ui = iced_tester::test::simulator(settings_view(settings_state(
@@ -372,14 +414,14 @@ fn settings_view_lists_drives_and_index_state() {
         status,
         &theme,
         None,
-        SettingsCategory::FolderSearch,
+        SettingsCategory::FileSearch,
     )));
 
     let system = drives[0].summary();
     let work = drives[1].summary();
     assert!(ui.find(system.as_str()).is_ok());
     assert!(ui.find(work.as_str()).is_ok());
-    assert!(ui.find("1234 folders indexed").is_ok());
+    assert!(ui.find("1234 entries indexed").is_ok());
 }
 
 #[test]

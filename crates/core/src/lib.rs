@@ -15,8 +15,7 @@ pub mod usage;
 pub mod util;
 
 pub use calc::{CalcKind, CalcResult};
-pub use folders::FolderEntry;
-pub use model::{AppEntry, HotkeyStatus, Icon, LaunchTarget, ScanResult};
+pub use model::{AppEntry, FileEntry, HotkeyStatus, Icon, LaunchTarget, ScanResult};
 pub use results::ResultRow;
 pub use search_scope::{DriveInfo, DriveKind, DriveMode, SearchScope};
 pub use settings::{FontChoice, HotkeyChoice, Settings, ThemeChoice};

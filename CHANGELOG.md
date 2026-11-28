@@ -7,6 +7,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A durable Turso-backed file and folder index in `crates/index`, stored at
+  `%LOCALAPPDATA%\Pirsa\index.db`. It indexes files and folders from the
+  configured scope (fixed drives by default), uses Turso's ngram FTS index,
+  ranks by match quality and frecency, and updates from a background watcher.
+- File results in trigger mode, with **File**/**Folder** labels and usage
+  recording when an item is opened.
+
+### Changed
+
+- The `:` trigger now searches the Turso file index rather than the legacy
+  binary folder index. The default scope is all fixed drives; profile-only and
+  selected-drive scopes remain available.
+- Index scope changes take effect after restarting Pirsa; **Rebuild** rescans
+  the current scope immediately.
+- File-mode rows now share one ranked list, so files and folders interleave by
+  match quality and a folder launch records usage just like a file launch.
+- Index writes run below normal priority, and a very large scan is capped at
+  2,000,000 entries so a pathological volume cannot fill the disk.
+
+### Removed
+
+- The legacy binary folder index (`folders.index`) and its bounded live
+  filesystem walk. File search now reads only the Turso index.
+- The folder-only result row and in-memory folder ranker; the Turso query ranker
+  replaces them.
+
 ## [0.14.0] - 2026-11-28
 
 ### Added

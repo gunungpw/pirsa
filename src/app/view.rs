@@ -34,7 +34,7 @@ impl Launcher {
             rows: &self.rows,
             calc: self.calc.as_ref(),
             icons: &self.icons,
-            folders: &self.folders,
+            files: &self.files,
             scope: &self.scope,
             drives: &self.drives,
             exclude_draft: &self.exclude_draft,

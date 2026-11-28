@@ -14,7 +14,7 @@ if ([string]::IsNullOrWhiteSpace($localAppData)) {
     throw 'Could not locate the local application data folder.'
 }
 
-# Pirsa is a per-user app. Settings, usage history, and the folder index live in
+# Pirsa is a per-user app. Settings, usage history, and the file index live in
 # %LOCALAPPDATA%\Pirsa and are deliberately never touched by this script.
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
 $principal = [Security.Principal.WindowsPrincipal]::new($identity)
