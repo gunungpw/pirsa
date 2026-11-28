@@ -14,6 +14,7 @@ impl Launcher {
                 fonts: available_fonts(),
                 scope: &self.scope,
                 drives: &self.drives,
+                trigger_draft: &self.trigger_draft,
                 exclude_draft: &self.exclude_draft,
                 index_status: self.index_status,
                 theme: &self.theme,

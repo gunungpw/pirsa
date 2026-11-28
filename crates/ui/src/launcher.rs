@@ -3,15 +3,20 @@
 use iced::border;
 use iced::widget::image::Handle;
 use iced::widget::text::Wrapping;
-use iced::widget::{Image, Space, button, column, container, mouse_area, row, text, text_input};
+use iced::widget::{
+    Image, Space, button, column, container, mouse_area, row, svg, text, text_input,
+};
 use iced::{Alignment, Color, Element, Font, Length};
 
 use pirsa_core::calc::{CalcKind, CalcResult};
-use pirsa_core::folders::FolderEntry;
+use pirsa_core::folders::{self, FolderEntry};
 use pirsa_core::{AppEntry, LaunchTarget, ResultRow};
 
 use super::style::*;
 use super::*;
+
+/// Material Symbols folder glyph, centred in the same 30 px slot as app icons.
+const FOLDER_ICON: &[u8] = include_bytes!("../../../assets/material-symbols--folder.svg");
 
 pub fn view(app: ViewState<'_>) -> Element<'_, Message> {
     let colors = Colors::from_theme(app.theme);
@@ -41,7 +46,16 @@ pub fn view(app: ViewState<'_>) -> Element<'_, Message> {
 }
 
 fn search_row(app: ViewState<'_>, colors: Colors, font: Font) -> Element<'_, Message> {
-    let field = text_input("Search apps, folders, calculate, convert…", app.query)
+    let folder_mode = folders::folder_term(app.query, &app.scope.trigger).is_some();
+    let placeholder = if folder_mode {
+        "Search folders…".to_owned()
+    } else {
+        format!(
+            "Search apps, calculate, convert…  ({} for folders)",
+            app.scope.trigger
+        )
+    };
+    let field = text_input(&placeholder, app.query)
         .id(INPUT_ID)
         .on_input(Message::QueryChanged)
         .padding([0, 0])
@@ -138,10 +152,14 @@ fn calc_card<'a>(
 }
 
 fn section_label(app: ViewState<'_>, colors: Colors, font: Font) -> Element<'_, Message> {
+    let folder_term = folders::folder_term(app.query, &app.scope.trigger);
+    let folder_mode = folder_term.is_some();
     let query_empty = app.query.trim().is_empty();
-    let indexing = app.indexing && app.apps.is_empty();
+    let indexing = app.indexing && app.apps.is_empty() && !folder_mode;
 
-    let title = if indexing {
+    let title = if folder_mode {
+        "Folders"
+    } else if indexing {
         "Indexing"
     } else if query_empty {
         "All apps"
@@ -149,7 +167,12 @@ fn section_label(app: ViewState<'_>, colors: Colors, font: Font) -> Element<'_, 
         "Results"
     };
 
-    let count = if indexing {
+    let count = if folder_mode {
+        match folder_term {
+            Some("") => "TYPE TO SEARCH".to_owned(),
+            _ => format!("{} FOUND", app.rows.len()),
+        }
+    } else if indexing {
         "SCANNING…".to_owned()
     } else if query_empty {
         format!("{} APPS", app.apps.len())
@@ -232,7 +255,7 @@ fn folder_row<'a>(
     let selected = position == app.selected;
 
     let content = row![
-        icon_tile(folder.name(), colors, font),
+        folder_icon(colors),
         row![
             text(folder.name())
                 .size(15)
@@ -327,7 +350,20 @@ fn result_row(
 }
 
 fn empty_state(app: ViewState<'_>, colors: Colors, font: Font) -> Element<'_, Message> {
-    let (title, subtitle) = if app.indexing {
+    let folder_term = folders::folder_term(app.query, &app.scope.trigger);
+    let (title, subtitle) = if let Some(term) = folder_term {
+        if term.is_empty() {
+            (
+                format!("Type a folder name after “{}”", app.scope.trigger),
+                "Folder search is separate from app search.".to_owned(),
+            )
+        } else {
+            (
+                format!("No folders for “{term}”"),
+                "Try a different folder name, or press Esc to close.".to_owned(),
+            )
+        }
+    } else if app.indexing {
         (
             "Indexing Start Menu…".to_owned(),
             "Apps will appear in a moment.".to_owned(),
@@ -495,6 +531,25 @@ fn icon_element<'a>(
             .into(),
         None => icon_tile(entry.name(), colors, font),
     }
+}
+
+/// A folder result uses the Material Symbols folder glyph rather than an
+/// initial tile.
+fn folder_icon(colors: Colors) -> Element<'static, Message> {
+    container(
+        svg(svg::Handle::from_memory(FOLDER_ICON))
+            .width(22)
+            .height(22)
+            .style(move |_theme, _status| svg::Style {
+                color: Some(colors.accent),
+            }),
+    )
+    .width(30)
+    .height(30)
+    .align_x(Alignment::Center)
+    .align_y(Alignment::Center)
+    .style(folder_tile_style)
+    .into()
 }
 
 fn icon_tile(name: &str, colors: Colors, font: Font) -> Element<'_, Message> {

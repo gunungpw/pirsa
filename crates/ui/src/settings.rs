@@ -18,6 +18,7 @@ pub fn settings_view<'a>(view: SettingsView<'a>) -> Element<'a, SettingsMessage>
         fonts,
         scope,
         drives,
+        trigger_draft,
         exclude_draft,
         index_status,
         theme,
@@ -81,8 +82,15 @@ pub fn settings_view<'a>(view: SettingsView<'a>) -> Element<'a, SettingsMessage>
     .width(Length::Fill)
     .style(pick_list_style);
 
-    let notice: Option<Element<'a, SettingsMessage>> =
-        notice.map(|notice| text(notice).size(11).font(font).color(colors.danger).into());
+    let notice: Element<'a, SettingsMessage> = match notice {
+        Some(notice) => column![
+            Space::new().height(8),
+            text(notice).size(11).font(font).color(colors.danger),
+            Space::new().height(8),
+        ]
+        .into(),
+        None => Space::new().height(0).into(),
+    };
 
     let preview = container(
         row![
@@ -148,17 +156,13 @@ pub fn settings_view<'a>(view: SettingsView<'a>) -> Element<'a, SettingsMessage>
         font,
     );
 
-    let mut behavior_items = vec![settings_field(
+    let behavior_items = vec![settings_field(
         "Global hotkey",
         "Summons the launcher from anywhere.",
         hotkey_picker.into(),
         colors,
         font,
     )];
-
-    if let Some(notice) = notice {
-        behavior_items.push(notice);
-    }
 
     let behavior = settings_pane(
         "How the launcher responds to input.",
@@ -168,8 +172,16 @@ pub fn settings_view<'a>(view: SettingsView<'a>) -> Element<'a, SettingsMessage>
     );
 
     let folder_search = settings_pane(
-        "Which folders the search index covers.",
-        search_section_items(scope, drives, exclude_draft, index_status, colors, font),
+        "How folder search is triggered and which folders it covers.",
+        search_section_items(
+            scope,
+            trigger_draft,
+            drives,
+            exclude_draft,
+            index_status,
+            colors,
+            font,
+        ),
         colors,
         font,
     );
@@ -258,6 +270,7 @@ pub fn settings_view<'a>(view: SettingsView<'a>) -> Element<'a, SettingsMessage>
             .width(Length::Fill)
             .align_y(Alignment::Start),
         Space::new().height(16),
+        notice,
         body,
         Space::new().height(12),
         row![Space::new().width(Length::Fill), close]
@@ -275,16 +288,30 @@ pub fn settings_view<'a>(view: SettingsView<'a>) -> Element<'a, SettingsMessage>
         .into()
 }
 
-/// Folder-search configuration: scope, drives, extra folders, exclusions,
-/// depth, hidden folders, and the index state.
+/// Folder-search configuration: trigger, scope, drives, extra folders,
+/// exclusions, depth, hidden folders, and the index state.
 fn search_section_items<'a>(
     scope: &'a SearchScope,
+    trigger_draft: &'a str,
     drives: &'a [DriveDetails],
     exclude_draft: &'a str,
     index_status: IndexStatus,
     colors: Colors,
     font: Font,
 ) -> Vec<Element<'a, SettingsMessage>> {
+    let trigger_input = text_input("e.g. : or >", trigger_draft)
+        .on_input(SettingsMessage::TriggerDraftChanged)
+        .on_submit(SettingsMessage::TriggerCommitted)
+        .padding([7, 9])
+        .size(12)
+        .font(font)
+        .style(field_input_style)
+        .width(Length::Fill);
+
+    let set_trigger = button(text("Set").size(11).font(font).color(colors.muted))
+        .on_press(SettingsMessage::TriggerCommitted)
+        .padding([3, 10])
+        .style(ghost_button_style);
     let preset_picker = pick_list(
         ScopePreset::ALL,
         Some(ScopePreset::of(&scope.drives)),
@@ -406,6 +433,17 @@ fn search_section_items<'a>(
         .style(ghost_button_style);
 
     let items: Vec<Element<'a, SettingsMessage>> = vec![
+        settings_field(
+            "Trigger",
+            "Start a query with this to search folders only. Press Set; 1–8 characters, no spaces or =.",
+            row![trigger_input, set_trigger]
+                .width(Length::Fill)
+                .spacing(6)
+                .align_y(Alignment::Center)
+                .into(),
+            colors,
+            font,
+        ),
         settings_field(
             "Scope",
             "Which drives the folder index searches.",

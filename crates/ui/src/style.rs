@@ -109,6 +109,16 @@ pub(super) fn calc_badge_style(theme: &Theme) -> container::Style {
     }
 }
 
+pub(super) fn folder_tile_style(theme: &Theme) -> container::Style {
+    let colors = Colors::from_theme(theme);
+
+    container::Style {
+        background: Some(Background::Color(colors.accent_soft)),
+        border: border::rounded(7).width(1).color(colors.hairline),
+        ..container::Style::default()
+    }
+}
+
 pub(super) fn search_input_style(theme: &Theme, _status: text_input::Status) -> text_input::Style {
     let colors = Colors::from_theme(theme);
 

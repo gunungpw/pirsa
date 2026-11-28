@@ -13,6 +13,7 @@ fn launcher_with_results(count: usize) -> Launcher {
         folders: Vec::new(),
         scope: SearchScope::default(),
         drives: Vec::new(),
+        trigger_draft: SearchScope::default().trigger.clone(),
         exclude_draft: String::new(),
         index_status: IndexStatus::default(),
         settings: Settings::default(),
@@ -182,35 +183,7 @@ fn folder_entry(path: &str) -> FolderEntry {
 }
 
 #[test]
-fn a_query_mixes_apps_and_folders_without_a_prefix() {
-    let mut launcher = launcher_with_results(0);
-
-    let _ = launcher.change_query("report".to_owned());
-    let generation = launcher.folder_generation;
-
-    let _ = launcher.update(Message::FolderSearchComplete {
-        generation,
-        folders: vec![
-            folder_entry("C:\\Users\\me\\old-reports"),
-            folder_entry("C:\\Users\\me\\notes"),
-            folder_entry("C:\\Users\\me\\reports"),
-        ],
-    });
-
-    // "reports" (prefix match) outranks "old-reports" (substring) and
-    // "notes" does not match at all.
-    assert_eq!(
-        launcher.rows,
-        vec![ResultRow::Folder(2), ResultRow::Folder(0)]
-    );
-    assert_eq!(launcher.selectable_count(), 2);
-
-    let _ = launcher.update(Message::Ui(ui::Message::Navigate(100)));
-    assert_eq!(launcher.selected, 1);
-}
-
-#[test]
-fn apps_outrank_folders_only_on_a_score_tie() {
+fn plain_queries_search_apps_only() {
     let mut launcher = launcher_with_results(0);
     launcher.apps.push(AppEntry::new(
         "Reports".to_owned(),
@@ -223,11 +196,39 @@ fn apps_outrank_folders_only_on_a_score_tie() {
 
     let _ = launcher.change_query("reports".to_owned());
 
+    assert_eq!(launcher.rows, vec![ResultRow::App(0)]);
+    assert!(
+        launcher.folders.is_empty(),
+        "folder search is off without the trigger"
+    );
+}
+
+#[test]
+fn the_trigger_searches_folders_only() {
+    let mut launcher = launcher_with_results(0);
+    launcher.apps.push(AppEntry::new(
+        "Reports".to_owned(),
+        "Start Menu".to_owned(),
+        LaunchTarget::Shell("test:reports".to_owned()),
+    ));
+    launcher.folders = vec![
+        folder_entry("C:\\Users\\me\\old-reports"),
+        folder_entry("C:\\Users\\me\\notes"),
+        folder_entry("C:\\Users\\me\\reports"),
+    ];
+
+    let _ = launcher.change_query(":reports".to_owned());
+
+    // "reports" (prefix match) outranks "old-reports" (substring) and
+    // "notes" does not match at all. Apps never appear in folder mode.
     assert_eq!(
         launcher.rows,
-        vec![ResultRow::App(0), ResultRow::Folder(0)],
-        "an app and a folder with the same name list the app first"
+        vec![ResultRow::Folder(2), ResultRow::Folder(0)]
     );
+    assert_eq!(launcher.selectable_count(), 2);
+
+    let _ = launcher.update(Message::Ui(ui::Message::Navigate(100)));
+    assert_eq!(launcher.selected, 1);
 }
 
 #[test]
@@ -237,10 +238,10 @@ fn folder_matches_that_stop_matching_drop_out() {
         .folders
         .push(folder_entry("C:\\Users\\me\\reports"));
 
-    let _ = launcher.change_query("report".to_owned());
+    let _ = launcher.change_query(":report".to_owned());
     assert_eq!(launcher.rows, vec![ResultRow::Folder(0)]);
 
-    let _ = launcher.change_query("note".to_owned());
+    let _ = launcher.change_query(":note".to_owned());
 
     assert!(launcher.rows.is_empty(), "the stale folder drops out");
     assert_eq!(
@@ -257,7 +258,7 @@ fn an_empty_query_clears_folder_matches() {
         .folders
         .push(folder_entry("C:\\Users\\me\\reports"));
 
-    let _ = launcher.change_query("report".to_owned());
+    let _ = launcher.change_query(":report".to_owned());
     let _ = launcher.change_query("   ".to_owned());
 
     assert_eq!(launcher.folders, [] as [FolderEntry; 0]);
@@ -269,16 +270,85 @@ fn an_empty_query_clears_folder_matches() {
 fn stale_folder_searches_are_ignored() {
     let mut launcher = launcher_with_results(0);
 
-    let _ = launcher.change_query("report".to_owned());
+    let _ = launcher.change_query(":report".to_owned());
     let stale = launcher.folder_generation;
 
-    let _ = launcher.change_query("report2".to_owned());
+    let _ = launcher.change_query(":report2".to_owned());
     let _ = launcher.update(Message::FolderSearchComplete {
         generation: stale,
         folders: vec![folder_entry("C:\\Users\\me\\reports")],
     });
 
     assert_eq!(launcher.folders, [] as [FolderEntry; 0]);
+}
+
+#[test]
+fn a_custom_trigger_is_used() {
+    let mut launcher = launcher_with_results(0);
+    launcher.scope.trigger = ">>".to_owned();
+    launcher
+        .folders
+        .push(folder_entry("C:\\Users\\me\\reports"));
+
+    let _ = launcher.change_query(">>reports".to_owned());
+    assert_eq!(launcher.rows, vec![ResultRow::Folder(0)]);
+
+    let _ = launcher.change_query(":reports".to_owned());
+    assert!(
+        launcher.rows.is_empty(),
+        ": is an app query once the trigger is >>"
+    );
+}
+
+#[test]
+fn a_bare_trigger_clears_folder_rows() {
+    let mut launcher = launcher_with_results(0);
+    launcher
+        .folders
+        .push(folder_entry("C:\\Users\\me\\reports"));
+
+    let _ = launcher.change_query(":reports".to_owned());
+    assert_eq!(launcher.rows, vec![ResultRow::Folder(0)]);
+
+    let _ = launcher.change_query(":".to_owned());
+    assert!(launcher.rows.is_empty());
+    assert!(launcher.folders.is_empty());
+}
+
+#[test]
+fn folder_mode_disables_the_calculator() {
+    let mut launcher = launcher_with_results(0);
+
+    let _ = launcher.change_query("1+1".to_owned());
+    assert!(launcher.calc.is_some());
+
+    let _ = launcher.change_query(":1+1".to_owned());
+    assert!(launcher.calc.is_none());
+    assert!(launcher.rows.is_empty());
+}
+
+#[test]
+fn a_valid_trigger_is_committed() {
+    let mut launcher = launcher_with_results(0);
+    launcher.trigger_draft = "  >>  ".to_owned();
+
+    let _ = launcher.update(Message::Settings(ui::SettingsMessage::TriggerCommitted));
+
+    assert_eq!(launcher.scope.trigger, ">>");
+    assert_eq!(launcher.trigger_draft, ">>");
+    assert!(launcher.settings_notice.is_none());
+}
+
+#[test]
+fn an_invalid_trigger_is_rejected() {
+    let mut launcher = launcher_with_results(0);
+    launcher.scope.trigger = ":".to_owned();
+    launcher.trigger_draft = "two words".to_owned();
+
+    let _ = launcher.update(Message::Settings(ui::SettingsMessage::TriggerCommitted));
+
+    assert_eq!(launcher.scope.trigger, ":");
+    assert!(launcher.settings_notice.is_some());
 }
 
 #[test]

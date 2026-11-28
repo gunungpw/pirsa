@@ -51,6 +51,8 @@ pub enum SettingsMessage {
     ExcludeRemoved(String),
     DepthChanged(u8),
     HiddenToggled(bool),
+    TriggerDraftChanged(String),
+    TriggerCommitted,
     /// The depth slider was released; rebuild the index for the new depth.
     ScopeCommitted,
     RebuildIndex,
@@ -135,8 +137,8 @@ impl std::fmt::Display for ScopePreset {
 #[derive(Debug, Clone, Copy)]
 pub struct ViewState<'a> {
     pub apps: &'a [AppEntry],
-    /// Apps and folders ranked into one list; the view shows the first
-    /// [`ViewState::result_limit`] rows.
+    /// Rows for the active query: apps in app mode, folders in folder mode.
+    /// The view shows the first [`ViewState::result_limit`] rows.
     pub rows: &'a [ResultRow],
     pub calc: Option<&'a CalcResult>,
     /// Real icons keyed by [`AppEntry::search_key`].
@@ -356,6 +358,7 @@ pub struct SettingsView<'a> {
     pub fonts: &'a [FontChoice],
     pub scope: &'a SearchScope,
     pub drives: &'a [DriveDetails],
+    pub trigger_draft: &'a str,
     pub exclude_draft: &'a str,
     pub index_status: IndexStatus,
     pub theme: &'a Theme,

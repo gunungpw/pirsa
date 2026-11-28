@@ -1,8 +1,8 @@
-//! The launcher's unified result list.
+//! The launcher's result list.
 //!
-//! Apps and folders share one ranked list, so a plain query searches both
-//! without a prefix. [`merge`] interleaves the two scored streams without
-//! re-ranking them.
+//! A query searches either apps or folders, never both at once. [`merge`]
+//! interleaves scored streams without re-ranking them; the launcher passes an
+//! empty stream for the mode that is not active.
 
 /// One row of the launcher's result list.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -1,7 +1,8 @@
 //! Folder matches for the launcher's search field.
 //!
-//! Folder search is not a separate mode: every query matches folders as well
-//! as apps, and [`crate::results::merge`] interleaves both into one list.
+//! Folder search is a separate mode selected by the trigger prefix stored in
+//! [`crate::search_scope::SearchScope`]. [`folder_term`] strips that prefix;
+//! [`rank_scores`] ranks the folders that match the remaining term.
 
 use std::path::{Path, PathBuf};
 
@@ -48,6 +49,19 @@ impl FolderEntry {
             }
         }
     }
+}
+
+/// Returns the folder term when `query` starts with `trigger`.
+///
+/// `None` means the query is for apps. A bare trigger returns `Some("")`, so
+/// the launcher can show a hint instead of searching for nothing.
+#[must_use]
+pub fn folder_term<'a>(query: &'a str, trigger: &str) -> Option<&'a str> {
+    if trigger.is_empty() {
+        return None;
+    }
+
+    query.trim_start().strip_prefix(trigger).map(str::trim)
 }
 
 /// Folder matches with their scores, best first.
@@ -102,6 +116,19 @@ mod tests {
             .unwrap_or_default();
 
         FolderEntry::new(path, name)
+    }
+
+    #[test]
+    fn the_trigger_selects_folder_mode() {
+        assert_eq!(folder_term(":reports", ":"), Some("reports"));
+        assert_eq!(folder_term("  :reports", ":"), Some("reports"));
+        assert_eq!(folder_term(": reports", ":"), Some("reports"));
+        assert_eq!(folder_term("::reports", "::"), Some("reports"));
+        assert_eq!(folder_term(":reports", "::"), None);
+        assert_eq!(folder_term("reports", ":"), None);
+        assert_eq!(folder_term(":", ":"), Some(""));
+        assert_eq!(folder_term("  :  ", ":"), Some(""));
+        assert_eq!(folder_term(":reports", ""), None);
     }
 
     #[test]

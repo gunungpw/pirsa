@@ -118,10 +118,11 @@ fn folder_rows_are_clickable_headlessly() {
 
     let mut state = app_state(&apps, &rows, &icons, &theme);
     state.folders = &folders;
-    state.query = "report";
+    state.query = ":report";
 
     let mut ui = iced_tester::test::simulator(view(state));
 
+    assert!(ui.find("Folders").is_ok());
     assert!(ui.find("reports").is_ok());
     ui.click("reports")
         .expect("a folder row should be clickable");
@@ -137,9 +138,9 @@ fn folder_rows_are_clickable_headlessly() {
 }
 
 #[test]
-fn folder_rows_share_the_list_with_apps() {
+fn folder_mode_uses_the_folders_label() {
     let apps = [notepad()];
-    let rows = [ResultRow::App(0), ResultRow::Folder(0)];
+    let rows = [ResultRow::Folder(0)];
     let icons = HashMap::new();
     let theme = Theme::Dark;
     let folders = [FolderEntry::new(
@@ -149,17 +150,32 @@ fn folder_rows_share_the_list_with_apps() {
 
     let mut state = app_state(&apps, &rows, &icons, &theme);
     state.folders = &folders;
-    state.query = "note";
+    state.query = ":note";
 
     let mut ui = iced_tester::test::simulator(view(state));
 
-    assert!(ui.find("Notepad").is_ok(), "the app row is listed");
-    assert!(ui.find("notes").is_ok(), "the folder row is listed");
-    assert!(ui.find("2 FOUND").is_ok(), "both kinds count as results");
     assert!(
-        ui.find("All apps").is_err(),
-        "a typed query is not the all-apps view"
+        ui.find("Folders").is_ok(),
+        "folder mode has its own heading"
     );
+    assert!(ui.find("1 FOUND").is_ok());
+    assert!(ui.find("notes").is_ok(), "the folder row is listed");
+    assert!(ui.find("Notepad").is_err(), "app rows are not shown");
+    assert!(ui.find("All apps").is_err());
+}
+
+#[test]
+fn a_bare_trigger_shows_the_folder_hint() {
+    let apps = [];
+    let rows = [];
+    let icons = HashMap::new();
+    let theme = Theme::Dark;
+    let mut state = app_state(&apps, &rows, &icons, &theme);
+    state.query = ":";
+
+    let mut ui = iced_tester::test::simulator(view(state));
+
+    assert!(ui.find("Type a folder name after “:”").is_ok());
 }
 
 fn settings_state<'a>(
@@ -176,6 +192,7 @@ fn settings_state<'a>(
         fonts: FontChoice::ALL,
         scope,
         drives,
+        trigger_draft: &scope.trigger,
         exclude_draft: "",
         index_status,
         theme,
@@ -308,6 +325,7 @@ fn settings_category_column_switches_the_detail_column() {
         SettingsCategory::FolderSearch,
     )));
 
+    assert!(ui.find("Trigger").is_ok());
     assert!(ui.find("Scope").is_ok());
     assert!(ui.find("Search depth").is_ok());
     assert!(ui.find("UI font").is_err());

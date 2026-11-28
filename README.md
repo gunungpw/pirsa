@@ -30,9 +30,10 @@ of the way.
 - **Unit conversion** — type `1 inch` to see it converted to millimetres,
   centimetres, metres, feet, yards, miles and kilometres, or use
   `1 inch to cm` for a single target.
-- **Folder search** — every query matches folders as well as apps: typing
-  `projects` lists your project apps and your project folders in one ranked
-  list, wherever the folders live. Enter opens the selected folder in Explorer.
+- **Folder search** — start a query with the folder trigger (default `:`) to
+  search folders only, e.g. `:projects`. Plain queries search apps only, and
+  the trigger can be changed in **Settings → Folder search**. Enter opens the
+  selected folder in Explorer. Folder rows use the Material Symbols folder icon.
 - **Real application icons** — every row shows the app's actual Windows icon,
   read from the shell for both Start Menu shortcuts and Store apps, with a
   colored initial tile only as a fallback. Icons are cached on disk, so later
@@ -138,6 +139,7 @@ footer or with **Ctrl+Q** while it is focused.
 | Key / action | Result |
 | --- | --- |
 | `Alt+Space` (default) | Open or hide the launcher; configurable in Settings |
+| `:` (configurable) at the start | Search folders only |
 | `↑` / `↓` | Move the selection (the calculation card comes first) |
 | `Enter` | Copy the selected calculation, launch the selected app, or open the selected folder |
 | `Ctrl+1` … `Ctrl+8` | Launch the nth app row (or open the nth folder result) |
@@ -154,18 +156,20 @@ footer or with **Ctrl+Q** while it is focused.
 
 ## Folder search
 
-Folders are part of the normal search — there is no prefix and no separate
-mode. A query ranks apps and folders on the same scale, so typing `reports`
-lists the apps named like that and the folders named like that together:
+Folder search is a separate mode. Prefix a query with the trigger — `:` by
+default — to search folders instead of apps:
 
 ```text
-reports   apps whose name matches, and folders whose name matches
+reports    apps whose name matches
+:reports   folders whose name matches
 ```
 
+The trigger can be changed in **Settings → Folder search** to `>`, `::`, or
+any other short token (1–8 characters, no spaces or `=`). A plain query never
+searches folders, and a bare trigger shows a prompt.
+
 Folder rows show the name and the last two folders of the path, and are marked
-**Folder** on the right. Apps win score ties, so a launchable app never hides
-behind a folder of the same name. **Enter** (or a click) opens the folder in
-Explorer.
+**Folder** on the right. **Enter** (or a click) opens the folder in Explorer.
 
 ### What gets searched
 
@@ -173,6 +177,7 @@ Folder search is driven by a scope you configure in **Settings → Folder search
 
 | Setting | Meaning |
 | --- | --- |
+| **Trigger** | Prefix that switches a query to folder search (default `:`) |
 | **Scope** | Profile only (default) · Fixed drives · All drives · Selected drives |
 | **Drives** | Tick the drives that participate; ticking one switches the scope to Selected |
 | **Extra folders** | Additional roots, added with the Windows folder picker |
@@ -244,8 +249,9 @@ category on the right — and you can change:
   Alt+Shift+Space, Ctrl+Shift+Space, Alt+`, Ctrl+`, Alt+Q, Ctrl+Alt+Q, or
   Ctrl+Alt+P. The new hotkey is registered immediately. If Windows rejects it
   because another app already owns it, the previous hotkey stays active.
-- **Folder search** — scope, drives, extra folders, exclusions, depth, and
-  hidden-folder handling, plus the folder index state and a **Rebuild** button.
+- **Folder search** — trigger, scope, drives, extra folders, exclusions, depth,
+  and hidden-folder handling, plus the folder index state and a **Rebuild**
+  button.
   These persist in `%LOCALAPPDATA%\Pirsa\search.txt`.
 
 There is deliberately **no “follow system”** theme option. Changes apply to both
@@ -294,8 +300,8 @@ crates/
       lib.rs           public models and module re-exports
       model.rs         AppEntry, LaunchTarget, ScanResult, Icon, HotkeyStatus
       calc.rs          safe expression parser and length-unit conversion
-      folders.rs       folder matching and ranking
-      results.rs       the unified app + folder result list
+      folders.rs       folder trigger splitting, matching, and ranking
+      results.rs       result row model and score merger
       search_scope.rs  drives/includes/excludes/depth, `search.txt` persistence
       search.rs        fuzzy ranking with unit tests
       settings.rs      font/theme/hotkey choices and persistent settings
@@ -322,11 +328,12 @@ crates/
     src/lib.rs         launcher/settings views, theme colors, widget styles
 src/
   main.rs              iced daemon bootstrap
-  app.rs               launcher state, settings window, folder mode, view state
+  app.rs               launcher state, settings window, query modes, view state
 crates/core/benches/rank.rs  criterion benchmark for the search ranking
 .github/workflows/ci.yml     fmt, clippy, tests, and benchmark build
 assets/
   andrsrxn--app-window.svg  source window glyph
+  material-symbols--folder.svg  folder result icon
   pirsa-icon.svg            transparent Teal Light app icon
   icon.png / icon.ico      generated icon assets
   icon-64.rgba              raw pixels used for the runtime window icon

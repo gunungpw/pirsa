@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-11-28
+
+### Changed
+
+- Folder search is now a separate mode. Start a query with the customizable
+  folder trigger (default `:`) to search folders only; plain queries search apps
+  only. The trigger is edited in **Settings → Folder search** and stored as
+  `trigger=` in `search.txt`.
+- Folder search results now use the Material Symbols folder icon from
+  `assets/material-symbols--folder.svg` instead of a colored initial tile.
+
 ## [0.12.0] - 2026-11-28
 
 ### Added

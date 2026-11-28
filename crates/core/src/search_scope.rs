@@ -19,6 +19,10 @@ pub const DEFAULT_DEPTH: usize = 6;
 pub const MIN_RESULTS: usize = 1;
 pub const MAX_RESULTS: usize = 16;
 pub const DEFAULT_RESULTS: usize = 8;
+/// The default prefix that switches a query into folder search.
+pub const DEFAULT_TRIGGER: &str = ":";
+/// Longest accepted trigger, in characters.
+pub const MAX_TRIGGER_LEN: usize = 8;
 
 /// How a drive is classified by Windows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -167,6 +171,8 @@ impl DriveMode {
 /// A configured folder search.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SearchScope {
+    /// Prefix that makes a query search folders instead of apps.
+    pub trigger: String,
     pub drives: DriveMode,
     /// Extra roots searched in addition to the drive selection.
     pub include: Vec<PathBuf>,
@@ -180,6 +186,7 @@ pub struct SearchScope {
 impl Default for SearchScope {
     fn default() -> Self {
         Self {
+            trigger: DEFAULT_TRIGGER.to_owned(),
             drives: DriveMode::Profile,
             include: Vec::new(),
             exclude: default_excludes(),
@@ -200,6 +207,19 @@ impl SearchScope {
 
     pub fn set_depth(&mut self, depth: usize) {
         self.depth = depth.clamp(MIN_DEPTH, MAX_DEPTH);
+    }
+
+    /// Sets the prefix that switches a query into folder search.
+    ///
+    /// Returns false for an empty, overlong, whitespace-containing, or
+    /// equals-containing value; the current trigger is left unchanged.
+    pub fn set_trigger(&mut self, value: &str) -> bool {
+        let Some(trigger) = normalize_trigger(value) else {
+            return false;
+        };
+
+        self.trigger = trigger;
+        true
     }
 
     pub fn set_max_results(&mut self, results: usize) {
@@ -393,6 +413,11 @@ impl SearchScope {
 
                     saw_exclude = true;
                 }
+                "trigger" => {
+                    if let Some(trigger) = normalize_trigger(value) {
+                        scope.trigger = trigger;
+                    }
+                }
                 "depth" => {
                     if let Ok(depth) = value.parse::<usize>() {
                         scope.set_depth(depth);
@@ -425,6 +450,7 @@ impl SearchScope {
     pub fn render(&self) -> String {
         let mut body = String::from("# Pirsa folder search scope\n");
         body.push_str(&format!("version={VERSION}\n"));
+        body.push_str(&format!("trigger={}\n", self.trigger));
         body.push_str(&format!("drives={}\n", self.drives.key()));
 
         for path in &self.include {
@@ -464,6 +490,23 @@ impl SearchScope {
             util::log(format!("could not save the search scope: {error}"));
         }
     }
+}
+
+/// Trims and validates a trigger. None means the value cannot be stored
+/// unambiguously in search.txt or used as a prefix.
+fn normalize_trigger(value: &str) -> Option<String> {
+    let value = value.trim();
+
+    if value.is_empty()
+        || value.chars().count() > MAX_TRIGGER_LEN
+        || value.contains('=')
+        || value.chars().any(char::is_whitespace)
+        || value.chars().any(char::is_control)
+    {
+        return None;
+    }
+
+    Some(value.to_owned())
 }
 
 fn default_excludes() -> Vec<String> {
@@ -604,6 +647,7 @@ mod tests {
     fn defaults_match_the_original_behaviour() {
         let scope = SearchScope::default();
 
+        assert_eq!(scope.trigger, DEFAULT_TRIGGER);
         assert_eq!(scope.drives, DriveMode::Profile);
         assert_eq!(scope.depth, DEFAULT_DEPTH);
         assert_eq!(scope.roots(&profile(), &[]), vec![profile()]);
@@ -709,6 +753,7 @@ mod tests {
     #[test]
     fn round_trip_preserves_every_field() {
         let mut scope = SearchScope::default().with_drives(DriveMode::Selected(vec!['C', 'D']));
+        scope.trigger = ">>".to_owned();
         scope.include.push(PathBuf::from("D:\\Work"));
         scope.add_exclude("*.bak");
         scope.set_depth(9);
@@ -723,15 +768,36 @@ mod tests {
     #[test]
     fn damaged_lines_fall_back_per_field() {
         let scope = SearchScope::parse(
-            "version=1\ndrives=selected:\ndepth=oops\nmax-results=999\ninclude=\nexclude=\n",
+            "version=1\ntrigger=bad value\ndrives=selected:\ndepth=oops\nmax-results=999\ninclude=\nexclude=\n",
         );
 
+        assert_eq!(scope.trigger, DEFAULT_TRIGGER);
         assert_eq!(scope.drives, DriveMode::Profile);
         assert_eq!(scope.depth, DEFAULT_DEPTH);
         assert_eq!(scope.max_results, MAX_RESULTS);
         assert!(scope.include.is_empty());
         // No exclusion line survived, so the defaults come back.
         assert_eq!(scope.exclude, default_excludes());
+    }
+
+    #[test]
+    fn trigger_validation_accepts_short_tokens() {
+        let mut scope = SearchScope::default();
+
+        assert_eq!(scope.trigger, DEFAULT_TRIGGER);
+        assert!(scope.set_trigger(">"));
+        assert_eq!(scope.trigger, ">");
+        assert!(scope.set_trigger("  ::  "));
+        assert_eq!(scope.trigger, "::");
+        assert!(scope.set_trigger("🚀"));
+        assert_eq!(scope.trigger, "🚀");
+
+        assert!(!scope.set_trigger(""));
+        assert!(!scope.set_trigger("   "));
+        assert!(!scope.set_trigger("two words"));
+        assert!(!scope.set_trigger("a=b"));
+        assert!(!scope.set_trigger("123456789"));
+        assert_eq!(scope.trigger, "🚀");
     }
 
     #[test]

@@ -28,7 +28,7 @@ use pirsa_ui as ui;
 /// The application's complete state.
 pub struct Launcher {
     pub(crate) apps: Vec<AppEntry>,
-    /// Apps and folders ranked into one list for the current query.
+    /// Rows for the active query: apps or folders, never both.
     pub(crate) rows: Vec<ResultRow>,
     /// Optional calculator/unit-conversion result for the current query.
     pub(crate) calc: Option<CalcResult>,
@@ -36,11 +36,13 @@ pub struct Launcher {
     pub(crate) usage: Usage,
     /// Real application icons, keyed by display name.
     pub(crate) icons: HashMap<String, Handle>,
-    /// Folder matches of the current query, indexed by [`ResultRow::Folder`].
+    /// Folder matches, indexed by [`ResultRow::Folder`]; only used in folder
+    /// mode.
     pub(crate) folders: Vec<FolderEntry>,
-    /// Where folder search looks and what it skips.
+    /// Folder trigger, roots, exclusions, and index settings.
     pub(crate) scope: SearchScope,
     pub(crate) drives: Vec<DriveDetails>,
+    pub(crate) trigger_draft: String,
     pub(crate) exclude_draft: String,
     pub(crate) index_status: IndexStatus,
     pub(crate) settings: Settings,
@@ -109,6 +111,7 @@ impl Launcher {
     pub fn boot(settings: Settings) -> (Self, Task<Message>) {
         let theme = theme_from_choice(settings.theme);
         let scope = SearchScope::load();
+        let trigger_draft = scope.trigger.clone();
         let drives = platform::drives::list();
         platform::ensure_folder_index(&scope);
         let index_status = platform::folder_index_status();
@@ -121,6 +124,7 @@ impl Launcher {
             folders: Vec::new(),
             scope,
             drives,
+            trigger_draft,
             exclude_draft: String::new(),
             index_status,
             settings,
@@ -282,37 +286,48 @@ impl Launcher {
 
     fn change_query(&mut self, query: String) -> Task<Message> {
         self.query = query;
-        self.calc = calc::evaluate(&self.query);
         self.error = None;
 
-        let term = self.query.trim().to_owned();
+        let folder_term = folders::folder_term(&self.query, &self.scope.trigger).map(str::to_owned);
 
-        if term.is_empty() {
-            // Nothing to match, so drop the previous folder matches instead of
-            // letting stale rows linger behind an empty query.
-            self.folders.clear();
-        }
+        if let Some(term) = folder_term {
+            self.calc = None;
 
-        // Matches still on hand are re-ranked against the new query right away;
-        // folders that no longer match drop out on their own.
-        self.recompute();
-        self.selected = 0;
+            if term.is_empty() {
+                self.cancel_folder_search();
+                self.recompute();
+                self.selected = 0;
+                return Task::none();
+            }
 
-        if term.is_empty() {
-            Task::none()
-        } else {
+            // Re-rank the matches still on hand immediately; the debounced
+            // filesystem search replaces them with the full result.
+            self.recompute();
+            self.selected = 0;
             self.begin_folder_search(term)
+        } else {
+            self.calc = calc::evaluate(&self.query);
+            self.cancel_folder_search();
+            self.recompute();
+            self.selected = 0;
+            Task::none()
         }
     }
 
     fn clear_query(&mut self) -> Task<Message> {
         self.query.clear();
         self.calc = None;
-        self.folders.clear();
+        self.cancel_folder_search();
         self.error = None;
         self.recompute();
         self.selected = 0;
         Task::none()
+    }
+
+    /// Drops folder matches and invalidates any in-flight folder search.
+    fn cancel_folder_search(&mut self) {
+        self.folders.clear();
+        self.folder_generation = self.folder_generation.wrapping_add(1);
     }
 
     /// Starts a debounced filesystem walk; stale results are dropped.
@@ -365,12 +380,32 @@ impl Launcher {
         }
 
         self.index_status = platform::folder_index_status();
-        self.folders.clear();
-        self.folder_generation = self.folder_generation.wrapping_add(1);
+        self.cancel_folder_search();
         // Rows index into the folder matches just dropped.
         self.recompute();
 
-        self.start_index_tick()
+        let term = folders::folder_term(&self.query, &self.scope.trigger)
+            .filter(|term| !term.is_empty())
+            .map(str::to_owned);
+        let tick = self.start_index_tick();
+
+        match term {
+            Some(term) => Task::batch([tick, self.begin_folder_search(term)]),
+            None => tick,
+        }
+    }
+
+    /// Applies a trigger edit, dropping results that belonged to the old mode.
+    fn apply_trigger_change(&mut self) -> Task<Message> {
+        self.cancel_folder_search();
+        self.recompute();
+        self.selected = 0;
+
+        let term = folders::folder_term(&self.query, &self.scope.trigger)
+            .filter(|term| !term.is_empty())
+            .map(str::to_owned);
+
+        term.map_or_else(Task::none, |term| self.begin_folder_search(term))
     }
 
     /// Drive letters currently selected, defaulting to the attached drives.
@@ -497,6 +532,24 @@ impl Launcher {
                 self.scope.include_hidden = hidden;
                 self.scope_changed()
             }
+            ui::SettingsMessage::TriggerDraftChanged(draft) => {
+                self.trigger_draft = draft;
+                Task::none()
+            }
+            ui::SettingsMessage::TriggerCommitted => {
+                if self.scope.set_trigger(&self.trigger_draft) {
+                    self.trigger_draft = self.scope.trigger.clone();
+                    self.scope.save();
+                    self.settings_notice = None;
+                    self.apply_trigger_change()
+                } else {
+                    self.settings_notice = Some(
+                        "The folder trigger must be 1–8 characters without spaces or “=”."
+                            .to_owned(),
+                    );
+                    Task::none()
+                }
+            }
             ui::SettingsMessage::RebuildIndex => self.rebuild_index(),
             ui::SettingsMessage::DragWindow => self
                 .settings_window
@@ -532,6 +585,7 @@ impl Launcher {
             // The window id is recorded when the open task reports back, so a
             // failed open never leaves a dead id behind.
             let (_, open) = window::open(settings_window_settings());
+            self.trigger_draft = self.scope.trigger.clone();
             self.settings_notice = None;
             util::log("opening settings window");
             open.map(Message::SettingsOpened)
@@ -824,7 +878,7 @@ impl Launcher {
     fn reset_search(&mut self) {
         self.query.clear();
         self.calc = None;
-        self.folders.clear();
+        self.cancel_folder_search();
         self.error = None;
         self.recompute();
         self.selected = 0;
@@ -854,8 +908,14 @@ impl Launcher {
     }
 
     fn recompute(&mut self) {
-        let apps = search::rank_scores(&self.apps, &self.query, &self.usage);
-        let folders = folders::rank_scores(&self.folders, &self.query);
+        let folder_term = folders::folder_term(&self.query, &self.scope.trigger);
+        let apps = if folder_term.is_some() {
+            Vec::new()
+        } else {
+            search::rank_scores(&self.apps, &self.query, &self.usage)
+        };
+        let folders =
+            folder_term.map_or_else(Vec::new, |term| folders::rank_scores(&self.folders, term));
 
         self.rows = results::merge(&apps, &folders, usize::MAX);
 
